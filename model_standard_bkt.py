@@ -28,16 +28,30 @@ class StandardBkt:
         self.placeholder_kc_id = self.max_kc_id + 1
         self.n_kcs = self.placeholder_kc_id + 1
 
-    def train(self, train_df, valid_df):
+        # initialize model components
+        self._probs_module = StandardBktProbs(self.n_kcs)
+        self._rnn_module = cell_bkt.BktCell(self.n_kcs)
+
+    def save(self):
+
+        public_params = { k: v for k,v in self.__dict__.items() if not k.startswith('_') }
+        comp_params = utils.save_params([self._probs_module, self._rnn_module])
         
+        np.savez(self.model_params_path, **public_params, **comp_params)
+
+    def load(self):
+        print("Loading weights ...")
+        d = np.load(self.model_params_path)
+        utils.load_params([self._probs_module, self._rnn_module], d)
+
+    def train(self, train_df, valid_df):
+        probs_module = self._probs_module
+        rnn_module = self._rnn_module
 
         # prepare data for training and validation
         train_seqs = self._make_seqs(train_df)
         valid_seqs = self._make_seqs(valid_df)
 
-        # initialize model components
-        probs_module = StandardBktProbs(self.n_kcs)
-        rnn_module = cell_bkt.BktCell(self.n_kcs)
         optimizer = keras.optimizers.Nadam(learning_rate=self.lr)
 
         # train
@@ -95,7 +109,10 @@ class StandardBkt:
 
             if waited >= self.patience:
                 break
-    
+        
+        # restore 
+        self.load()
+
     def _make_seqs(self, df):
 
         seqs = sf.make_sequences(df, 'student')
@@ -107,6 +124,29 @@ class StandardBkt:
 
         return seqs 
 
+    def predict(self, df):
+
+        probs_module = self._probs_module
+        rnn_module = self._rnn_module
+
+        seqs = self._make_seqs(df)
+        preds = np.zeros(df.shape[0])
+        for features, new_seqs in sf.create_loader(seqs, self.n_batch_seqs, self.n_batch_trials, sf.create_kt_transformer(self.n_kcs), shuffle=False):
+
+            # acquire BKT's transition and emission parameters
+            logit_probs_prev = probs_module(features.prev_skill)
+            logit_probs_curr = probs_module(features.curr_skill)
+
+            # run BKT
+            ypred = rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, new_seqs, logit_probs_prev, logit_probs_curr)
+
+            for i in range(ypred.shape[0]):
+                for j in range(ypred.shape[1]):
+                    trial_index = features.trial_index[i,j]
+                    if trial_index > -1:
+                        preds[trial_index] = ypred[i,j]
+
+        return preds 
 
 class StandardBktProbs(object):
 
@@ -147,5 +187,13 @@ if __name__ == "__main__":
     valid_df = df[valid_ix]
 
     print("Training: %d, Validation: %d" % (train_df.shape[0], valid_df.shape[0]))
-    bkt = StandardBkt(max_kc_id, 500, 50, 50, 0.01, 5, "tmp/bktparams")
+    bkt = StandardBkt(max_kc_id, 500, 50, 50, 0.01, 5, "tmp/bktparams.npz")
+    
     bkt.train(train_df, valid_df)
+
+    preds = bkt.predict(valid_df)
+    actual = np.array(valid_df['correct'])
+
+    xe = -(actual * np.log(preds) + (1-actual) * np.log(1-preds))
+    
+    print("Valid XE: %0.2f" % np.mean(xe))

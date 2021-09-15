@@ -13,9 +13,10 @@ def make_sequences(df, seq_identifier):
     """
     seqs = defaultdict(list)
 
-    for row in df.to_dict('records'):
+    for i, row in enumerate(df.to_dict('records')):
 
         key = row[seq_identifier]
+        row['__index__'] = i
         seqs[key].append(row)
     
     return [s for _, s in seqs.items()] 
@@ -51,6 +52,7 @@ def featurize_seqs(seqs, cols_to_monitor):
         for c, _ in cols_to_monitor.items():
             first_element['curr_%s' % c] = seq[0][c]
         first_element['__padding__'] = False
+        first_element['__index__'] = seq[0]['__index__']
         featurized_seq = [first_element]
 
         for e in seq[1:]:
@@ -60,11 +62,13 @@ def featurize_seqs(seqs, cols_to_monitor):
                 for c, _ in cols_to_monitor.items():
                     element['curr_%s' % c] = e[c]
                 element['__padding__'] = False
+                element['__index__'] = e['__index__']
             else:
                 for c, p in cols_to_monitor.items():
                     element['curr_%s' % c] = p
                 element['__padding__'] = True 
-
+                element['__index__'] = -1
+            
             featurized_seq.append(element)
         
         featurized_seqs.append(featurized_seq)
@@ -121,7 +125,7 @@ def dummy_transformer(subseqs):
 
 def create_kt_transformer(n_kcs):
 
-    KTFeatures = namedtuple('KTFeatures', 'prev_corr prev_skill curr_corr curr_skill curr_mask')
+    KTFeatures = namedtuple('KTFeatures', 'prev_corr prev_skill curr_corr curr_skill curr_mask trial_index')
 
     def transformer(subseqs):
         n_batch = len(subseqs)
@@ -132,6 +136,7 @@ def create_kt_transformer(n_kcs):
         curr_corr = np.zeros((n_batch, n_trials), dtype=np.float32)
         curr_skill = np.zeros((n_batch, n_trials, n_kcs), dtype=np.float32)
         curr_mask = np.zeros((n_batch, n_trials), dtype=np.float32)
+        trial_index = np.zeros((n_batch, n_trials), dtype=np.int)
 
         for s, seq in enumerate(subseqs):
             for t, elm in enumerate(seq):
@@ -143,7 +148,8 @@ def create_kt_transformer(n_kcs):
                 prev_skill[s, t, elm['prev_skill']] = 1
                 curr_skill[s, t, elm['curr_skill']] = 1
                 
-        return KTFeatures(prev_corr, prev_skill, curr_corr, curr_skill, curr_mask)
+                trial_index[s, t] = elm['__index__']
+        return KTFeatures(prev_corr, prev_skill, curr_corr, curr_skill, curr_mask, trial_index)
     
     return transformer
 
