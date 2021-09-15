@@ -16,3 +16,15 @@ def xe_loss(ytrue, ypred, mask):
     losses = -(ytrue * tf.math.log(ypred) + (1-ytrue) * tf.math.log(1-ypred))
     losses = losses * mask
     return tf.reduce_sum(losses) / tf.reduce_sum(mask)
+
+def load_params(components, params):
+    for component in components:
+        for name, p in component.trainables:
+            p.assign(params[name])
+   
+def save_params(components):
+    params = {}
+    for component in components:
+        for name, p in component.trainables:
+            params[name] = p.numpy()
+    return params

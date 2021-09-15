@@ -4,31 +4,16 @@
 import tensorflow as tf
 import numpy as np
 
-class StandardBktProbs(object):
-
-    def __init__(self, n_kcs):
-        self.n_kcs = n_kcs
-
-        # [n_skills, 4]
-        self.logit_probs = tf.Variable(tf.random.normal((self.n_kcs,4), mean=0, stddev=0.1), name="bktprobs")
-
-        self.trainables = [self.logit_probs]
-        
-    def __call__(self, skill):
-        """ 
-            skill: [n_batch, n_steps, n_skills]
-            Returns:
-                BKT Probabilities per skill (pL, pF, pC0, pC1) [n_batch, n_steps, 4]
-        """
-        return tf.matmul(skill, self.logit_probs)
-        
 class BktCell(object):
-    def __init__(self, n_kcs, **kwargs):
+    
+    def __init__(self, n_kcs):
         self.n_kcs = n_kcs
         self.states = None 
 
         self.logit_pI = tf.Variable(tf.random.normal((self.n_kcs,1), mean=0, stddev=0.1), name="bkt_pI")
-        self.trainables = [self.logit_pI]
+        self.trainables = [
+            ('logit_pI', self.logit_pI)
+        ]
 
     def __call__(self, prev_skill, prev_corr, curr_skill, new_seqs, logit_probs_prev, logit_probs_curr):
         """

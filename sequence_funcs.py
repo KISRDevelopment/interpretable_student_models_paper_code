@@ -119,11 +119,9 @@ def dummy_transformer(subseqs):
     
     return features
 
-def create_kt_transformer(max_kc_idx):
+def create_kt_transformer(n_kcs):
 
     KTFeatures = namedtuple('KTFeatures', 'prev_corr prev_skill curr_corr curr_skill curr_mask')
-
-    n_kcs = max_kc_idx + 1
 
     def transformer(subseqs):
         n_batch = len(subseqs)
