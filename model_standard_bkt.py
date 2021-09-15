@@ -7,6 +7,7 @@ import sequence_funcs as sf
 import utils 
 import tensorflow.keras as keras 
 import numpy as np
+
 class StandardBkt:
 
     def __init__(self, 
@@ -33,10 +34,8 @@ class StandardBkt:
         self._rnn_module = cell_bkt.BktCell(self.n_kcs)
 
     def save(self):
-
         public_params = { k: v for k,v in self.__dict__.items() if not k.startswith('_') }
         comp_params = utils.save_params([self._probs_module, self._rnn_module])
-        
         np.savez(self.model_params_path, **public_params, **comp_params)
 
     def load(self):
@@ -45,9 +44,7 @@ class StandardBkt:
         utils.load_params([self._probs_module, self._rnn_module], d)
 
     def train(self, train_df, valid_df):
-        probs_module = self._probs_module
-        rnn_module = self._rnn_module
-
+        
         # prepare data for training and validation
         train_seqs = self._make_seqs(train_df)
         valid_seqs = self._make_seqs(valid_df)
@@ -59,22 +56,20 @@ class StandardBkt:
         waited = 0
         for e in range(self.epochs):
             batch_losses = []
-            for features, new_seqs in sf.create_loader(train_seqs, self.n_batch_seqs, self.n_batch_trials, sf.create_kt_transformer(self.n_kcs)):
+            for features, new_seqs in self._iterate(valid_seqs, shuffle=True):
 
                 with tf.GradientTape() as t:
-                    
-                    # acquire BKT's transition and emission parameters
-                    logit_probs_prev = probs_module(features.prev_skill)
-                    logit_probs_curr = probs_module(features.curr_skill)
-
-                    # run BKT
-                    ypred = rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, new_seqs, logit_probs_prev, logit_probs_curr)
-
+                    ypred = self._run_model(features, new_seqs)
+            
                     # calculate loss
                     current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
 
+                if new_seqs:
+                    trainables = self._rnn_module.trainables+self._probs_module.trainables
+                else:
+                    trainables = self._probs_module.trainables
+                trainables = [t[1] for t in trainables]
 
-                trainables = [t[1] for t in rnn_module.trainables+probs_module.trainables]
                 grads = t.gradient(current_loss, trainables)
                 optimizer.apply_gradients(zip(grads, trainables))
 
@@ -82,15 +77,9 @@ class StandardBkt:
             
             # compute validation loss
             valid_batch_losses = []
-            for features, new_seqs in sf.create_loader(valid_seqs, self.n_batch_seqs, self.n_batch_trials, sf.create_kt_transformer(self.n_kcs)):
-
-                # acquire BKT's transition and emission parameters
-                logit_probs_prev = probs_module(features.prev_skill)
-                logit_probs_curr = probs_module(features.curr_skill)
-
-                # run BKT
-                ypred = rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, new_seqs, logit_probs_prev, logit_probs_curr)
-
+            for features, new_seqs in self._iterate(valid_seqs, shuffle=False):
+                ypred = self._run_model(features, new_seqs)
+            
                 # calculate loss
                 current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
 
@@ -99,8 +88,7 @@ class StandardBkt:
 
             if valid_loss < min_loss:
                 min_loss = valid_loss
-                params = utils.save_params([rnn_module, probs_module])
-                np.savez(self.model_params_path, **params)
+                self.save()
                 waited = 0
             else:
                 waited += 1
@@ -124,22 +112,24 @@ class StandardBkt:
 
         return seqs 
 
-    def predict(self, df):
+    def _run_model(self, features, new_seqs):
 
-        probs_module = self._probs_module
-        rnn_module = self._rnn_module
+        # acquire BKT's transition and emission parameters
+        logit_probs_prev = self._probs_module(features.prev_skill)
+        logit_probs_curr = self._probs_module(features.curr_skill)
+
+        # run BKT
+        ypred = self._rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, 
+            new_seqs, logit_probs_prev, logit_probs_curr)
+
+        return ypred 
+
+    def predict(self, df):
 
         seqs = self._make_seqs(df)
         preds = np.zeros(df.shape[0])
-        for features, new_seqs in sf.create_loader(seqs, self.n_batch_seqs, self.n_batch_trials, sf.create_kt_transformer(self.n_kcs), shuffle=False):
-
-            # acquire BKT's transition and emission parameters
-            logit_probs_prev = probs_module(features.prev_skill)
-            logit_probs_curr = probs_module(features.curr_skill)
-
-            # run BKT
-            ypred = rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, new_seqs, logit_probs_prev, logit_probs_curr)
-
+        for features, new_seqs in self._iterate(seqs, shuffle=False):
+            ypred = self._run_model(features, new_seqs)
             for i in range(ypred.shape[0]):
                 for j in range(ypred.shape[1]):
                     trial_index = features.trial_index[i,j]
@@ -148,6 +138,9 @@ class StandardBkt:
 
         return preds 
 
+    def _iterate(self, seqs, shuffle=False):
+        return sf.create_loader(seqs, self.n_batch_seqs, self.n_batch_trials, sf.create_kt_transformer(self.n_kcs), shuffle=shuffle)
+    
 class StandardBktProbs(object):
 
     def __init__(self, n_kcs):
@@ -173,27 +166,34 @@ if __name__ == "__main__":
 
     import sys 
     import pandas as pd 
-
+    import scipy.stats as stats 
     df = pd.read_csv(sys.argv[1])
-
+    
     split = np.load(sys.argv[2])
     
     max_kc_id = np.max(df['skill'])
 
     train_ix = split[0, :] == 2
     valid_ix = split[0, :] == 1
-    
+    test_ix = split[0, :] == 0
+
     train_df = df[train_ix]
     valid_df = df[valid_ix]
+    test_df = df[test_ix]
 
-    print("Training: %d, Validation: %d" % (train_df.shape[0], valid_df.shape[0]))
+    print("Training: %d, Validation: %d, Test: %d" % (train_df.shape[0], valid_df.shape[0], test_df.shape[0]))
     bkt = StandardBkt(max_kc_id, 500, 50, 50, 0.01, 5, "tmp/bktparams.npz")
     
     bkt.train(train_df, valid_df)
 
-    preds = bkt.predict(valid_df)
-    actual = np.array(valid_df['correct'])
+    preds = bkt.predict(test_df)
+    actual = np.array(test_df['correct'])
 
     xe = -(actual * np.log(preds) + (1-actual) * np.log(1-preds))
     
-    print("Valid XE: %0.2f" % np.mean(xe))
+    print("Test XE: %0.2f" % np.mean(xe))
+
+    import sklearn.metrics 
+
+    auc = sklearn.metrics.roc_auc_score(actual, preds)
+    print("AUC-ROC: %0.2f" % auc)
