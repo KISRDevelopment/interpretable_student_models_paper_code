@@ -22,6 +22,21 @@ def train_test(cfg, df, split):
 
     model.train(train_df, valid_df)
 
+    # sweep decision thresholds on validation set and pick one that achieves highest BACC
+    thresholds = np.linspace(0, 1, 50)
+    baccs = np.zeros_like(thresholds)
+    ytrue_valid = np.array(valid_df['correct'])
+    preds_valid = model.predict(valid_df)
+
+    for i in range(len(thresholds)):
+        t = thresholds[i]
+        hard_preds = preds_valid >= t 
+        baccs[i] = sklearn.metrics.balanced_accuracy_score(ytrue_valid, hard_preds)
+    
+    ix = np.argmax(baccs)
+    best_threshold = thresholds[ix]
+    print("Decision threshold: %0.2f" % best_threshold)
+
     preds = model.predict(test_df)
     actual = np.array(test_df['correct'])
 
@@ -29,7 +44,21 @@ def train_test(cfg, df, split):
     print("Test XE: %0.2f" % np.mean(xe))
 
     auc = sklearn.metrics.roc_auc_score(actual, preds)
-    print("AUC-ROC: %0.2f" % auc)
+    print("Test AUC-ROC: %0.2f" % auc)
+
+    hard_preds = preds >= best_threshold
+    cm = sklearn.metrics.confusion_matrix(actual, hard_preds)
+    bacc = sklearn.metrics.balanced_accuracy_score(actual, hard_preds)
+    print("Test BACC: %0.2f" % bacc)
+    print(cm)
+
+    return {
+        "xe" : xe,
+        "auc-roc" : auc,
+        "threshold" : best_threshold,
+        "bacc" : bacc,
+        "cm" : cm.tolist()
+    }
 
 if __name__ == "__main__":
 

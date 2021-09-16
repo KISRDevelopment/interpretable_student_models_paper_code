@@ -2,8 +2,9 @@
     "model" : "model_standard_bkt",
     "n_batch_seqs" : 50,
     "n_batch_trials" : 50,
-    "epochs" : 100,
+    "epochs" : 10,
     "lr" : 0.01,
     "patience" : 10,
-    "model_params_path" : "tmp/model_standard_bkt_params.npz"
+    "model_params_path" : "tmp/model_standard_bkt_params.npz",
+    "decision_thres" : 0.5
 }
