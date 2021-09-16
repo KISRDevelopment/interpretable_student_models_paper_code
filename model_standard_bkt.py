@@ -29,19 +29,80 @@ class StandardBkt:
         self.placeholder_kc_id = self.max_kc_id + 1
         self.n_kcs = self.placeholder_kc_id + 1
 
-        # initialize model components
+        self._init_model_components()
+
+#
+# These functions are what needs to be customized on a per-model basis
+#
+    def _init_model_components(self):
+        """
+            Initializes the components of the model and stores them in the _components attribute
+        """
         self._probs_module = StandardBktProbs(self.n_kcs)
         self._rnn_module = cell_bkt.BktCell(self.n_kcs)
 
+        self._components = [self._probs_module, self._rnn_module]
+
+
+    def _make_seqs(self, df):
+        """
+            Creates and featurizes the sequences from the dataframe
+        """
+        seqs = sf.make_sequences(df, 'student')
+        seqs = sf.pad_seqs(seqs, self.n_batch_trials)
+        seqs = sf.featurize_seqs(seqs, {
+            "correct" : 0,
+            "skill" : self.placeholder_kc_id
+        })
+
+        return seqs 
+
+    def _run_model(self, features, new_seqs):
+        """
+            Executes the model
+        """
+        # acquire BKT's transition and emission parameters
+        logit_probs_prev = self._probs_module(features.prev_skill)
+        logit_probs_curr = self._probs_module(features.curr_skill)
+
+        # run BKT
+        ypred = self._rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, 
+            new_seqs, logit_probs_prev, logit_probs_curr)
+
+        return ypred 
+
+    def _create_feature_transformer(self):
+        """
+            Transforms features into numeric arrays
+        """
+        return sf.create_kt_transformer(self.n_kcs)
+#
+# End of functions that need to be customized
+#
+
+    def _iterate(self, seqs, shuffle=False):
+        """
+            Iterates over sequences in batches
+        """
+        return sf.create_loader(seqs, self.n_batch_seqs, self.n_batch_trials, self._create_feature_transformer() , shuffle=shuffle)
+
+
+    def get_trainables(self, new_seqs):
+        trainables = []
+        for comp in self._components:
+            trainables.extend(comp.get_trainables(new_seqs))
+        trainables = [t[1] for t in trainables]
+        return trainables
+
     def save(self):
         public_params = { k: v for k,v in self.__dict__.items() if not k.startswith('_') }
-        comp_params = utils.save_params([self._probs_module, self._rnn_module])
+        comp_params = utils.save_params(self._components)
         np.savez(self.model_params_path, **public_params, **comp_params)
 
     def load(self):
         print("Loading weights ...")
         d = np.load(self.model_params_path)
-        utils.load_params([self._probs_module, self._rnn_module], d)
+        utils.load_params(self._components, d)
 
     def train(self, train_df, valid_df):
         
@@ -56,19 +117,13 @@ class StandardBkt:
         waited = 0
         for e in range(self.epochs):
             batch_losses = []
-            for features, new_seqs in self._iterate(valid_seqs, shuffle=True):
+            for features, new_seqs in self._iterate(train_seqs, shuffle=True):
 
                 with tf.GradientTape() as t:
                     ypred = self._run_model(features, new_seqs)
-            
-                    # calculate loss
                     current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
 
-                if new_seqs:
-                    trainables = self._rnn_module.trainables+self._probs_module.trainables
-                else:
-                    trainables = self._probs_module.trainables
-                trainables = [t[1] for t in trainables]
+                trainables = self.get_trainables(new_seqs)
 
                 grads = t.gradient(current_loss, trainables)
                 optimizer.apply_gradients(zip(grads, trainables))
@@ -79,8 +134,6 @@ class StandardBkt:
             valid_batch_losses = []
             for features, new_seqs in self._iterate(valid_seqs, shuffle=False):
                 ypred = self._run_model(features, new_seqs)
-            
-                # calculate loss
                 current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
 
                 valid_batch_losses.append(current_loss.numpy())
@@ -101,29 +154,6 @@ class StandardBkt:
         # restore 
         self.load()
 
-    def _make_seqs(self, df):
-
-        seqs = sf.make_sequences(df, 'student')
-        seqs = sf.pad_seqs(seqs, self.n_batch_trials)
-        seqs = sf.featurize_seqs(seqs, {
-            "correct" : 0,
-            "skill" : self.placeholder_kc_id
-        })
-
-        return seqs 
-
-    def _run_model(self, features, new_seqs):
-
-        # acquire BKT's transition and emission parameters
-        logit_probs_prev = self._probs_module(features.prev_skill)
-        logit_probs_curr = self._probs_module(features.curr_skill)
-
-        # run BKT
-        ypred = self._rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, 
-            new_seqs, logit_probs_prev, logit_probs_curr)
-
-        return ypred 
-
     def predict(self, df):
 
         seqs = self._make_seqs(df)
@@ -138,9 +168,6 @@ class StandardBkt:
 
         return preds 
 
-    def _iterate(self, seqs, shuffle=False):
-        return sf.create_loader(seqs, self.n_batch_seqs, self.n_batch_trials, sf.create_kt_transformer(self.n_kcs), shuffle=shuffle)
-    
 class StandardBktProbs(object):
 
     def __init__(self, n_kcs):
@@ -152,7 +179,10 @@ class StandardBktProbs(object):
         self.trainables = [
             ('logit_probs', self.logit_probs)
         ]
-        
+    
+    def get_trainables(self, new_seqs):
+        return self.trainables
+    
     def __call__(self, skill):
         """ 
             skill: [n_batch, n_steps, n_skills]

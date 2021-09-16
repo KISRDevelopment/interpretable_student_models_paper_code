@@ -15,6 +15,14 @@ class BktCell(object):
             ('logit_pI', self.logit_pI)
         ]
 
+
+    def get_trainables(self, new_seqs):
+        if new_seqs:
+            return []
+        
+        return self.trainables
+    
+
     def __call__(self, prev_skill, prev_corr, curr_skill, new_seqs, logit_probs_prev, logit_probs_curr):
         """
             prev_skill [n_batch, n_steps, n_skills]     Skill encountered at previous time step (one-hot)
