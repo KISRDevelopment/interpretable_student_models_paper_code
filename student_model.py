@@ -10,6 +10,7 @@ import numpy as np
 class StudentModel:
 
     def __init__(self, cfg):
+        self.p_n_batch_seqs = cfg['p_n_batch_seqs']
         self.n_batch_seqs = cfg['n_batch_seqs']
         self.n_batch_trials = cfg['n_batch_trials']
         self.epochs = cfg['epochs']
@@ -55,13 +56,18 @@ class StudentModel:
         """
             Iterates over sequences in batches
         """
-        return sf.create_loader(seqs, self.n_batch_seqs, self.n_batch_trials, self._create_feature_transformer() , shuffle=shuffle)
+        n_batch_seqs = self.n_batch_seqs
+        if self.p_n_batch_seqs:
+            n_batch_seqs = int(n_batch_seqs * len(seqs))
+            print("Effective batchsize: (%d,%d)" % (n_batch_seqs, self.n_batch_trials))
+        return sf.create_loader(seqs, n_batch_seqs, self.n_batch_trials, self._create_feature_transformer() , shuffle=shuffle)
 
 
     def get_trainables(self, new_seqs):
         trainables = []
         for comp in self._components:
             trainables.extend(comp.get_trainables(new_seqs))
+
         trainables = [t[1] for t in trainables]
         return trainables
 
@@ -95,7 +101,7 @@ class StudentModel:
                     current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
 
                 trainables = self.get_trainables(new_seqs)
-
+                
                 grads = t.gradient(current_loss, trainables)
                 optimizer.apply_gradients(zip(grads, trainables))
 

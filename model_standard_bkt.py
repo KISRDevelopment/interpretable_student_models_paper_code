@@ -18,11 +18,12 @@ class StandardBktModel(student_model.StudentModel):
         self.max_kc_id = max_kc_id
         self.placeholder_kc_id = self.max_kc_id + 1
         self.n_kcs = self.placeholder_kc_id + 1
+        self.with_forgetting = cfg['with_forgetting']
 
         super().__init__(cfg)
 
     def _init_model_components(self, components):
-        self._probs_module = StandardBktProbs(self.n_kcs)
+        self._probs_module = StandardBktProbs(self.n_kcs, self.with_forgetting)
         self._rnn_module = cell_bkt.BktCell(self.n_kcs)
 
         components.extend([self._probs_module, self._rnn_module])
@@ -46,12 +47,12 @@ class StandardBktModel(student_model.StudentModel):
             Executes the model
         """
         # acquire BKT's transition and emission parameters
-        logit_probs_prev = self._probs_module(features.prev_skill)
-        logit_probs_curr = self._probs_module(features.curr_skill)
+        probs_prev = self._probs_module(features.prev_skill)
+        probs_curr = self._probs_module(features.curr_skill)
 
         # run BKT
         ypred = self._rnn_module(features.prev_skill, features.prev_corr, features.curr_skill, 
-            new_seqs, logit_probs_prev, logit_probs_curr)
+            new_seqs, probs_prev, probs_curr)
 
         return ypred 
 
@@ -64,11 +65,17 @@ class StandardBktModel(student_model.StudentModel):
 
 class StandardBktProbs(object):
 
-    def __init__(self, n_kcs):
+    def __init__(self, n_kcs, with_forgetting):
         self.n_kcs = n_kcs
+        self.with_forgetting = with_forgetting 
 
         # [n_skills, 4]
         self.logit_probs = tf.Variable(tf.random.normal((self.n_kcs,4), mean=0, stddev=0.1), name="bktprobs")
+        
+        forgetting_mask = np.ones((self.n_kcs, 4))
+        if not self.with_forgetting:
+            forgetting_mask[:,1] = 0
+        self.forgetting_mask = tf.convert_to_tensor(forgetting_mask.astype(np.float32))
 
         self.trainables = [
             ('logit_probs', self.logit_probs)
@@ -83,7 +90,6 @@ class StandardBktProbs(object):
             Returns:
                 BKT Probabilities per skill (pL, pF, pC0, pC1) [n_batch, n_steps, 4]
         """
-        return tf.matmul(skill, self.logit_probs)
+        return tf.matmul(skill, tf.sigmoid(self.logit_probs) * self.forgetting_mask)
         
-
     

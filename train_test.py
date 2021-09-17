@@ -53,7 +53,7 @@ def train_test(cfg, df, split):
     print(cm)
 
     return {
-        "xe" : xe,
+        "xe" : np.mean(xe),
         "auc-roc" : auc,
         "threshold" : best_threshold,
         "bacc" : bacc,

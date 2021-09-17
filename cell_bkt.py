@@ -18,19 +18,19 @@ class BktCell(object):
 
     def get_trainables(self, new_seqs):
         if new_seqs:
-            return []
+            return self.trainables
         
-        return self.trainables
+        return []
     
 
-    def __call__(self, prev_skill, prev_corr, curr_skill, new_seqs, logit_probs_prev, logit_probs_curr):
+    def __call__(self, prev_skill, prev_corr, curr_skill, new_seqs, probs_prev, probs_curr):
         """
             prev_skill [n_batch, n_steps, n_skills]     Skill encountered at previous time step (one-hot)
             prev_corr  [n_batch, n_steps]               Whether answer at previous time step is correct or not
             curr_skill [n_batch, n_steps, n_skills]     Skill at current time step (one-hot)
             new_seqs: boolean                           Is this a batch of new sequences?
-            logit_probs_prev: [n_batch, n_steps, 4]     The logits of pL, pF, pC0, pC1 at previous time step
-            logit_probs_curr: [n_batch, n_steps, 4]     The logits of pL, pF, pC0, pC1 at curr time step
+            probs_prev: [n_batch, n_steps, 4]           The  pL, pF, pC0, pC1 at previous time step
+            probs_curr: [n_batch, n_steps, 4]           The  pL, pF, pC0, pC1 at curr time step
         """
 
         # this is used to clip the states
@@ -47,8 +47,8 @@ class BktCell(object):
             tf.convert_to_tensor(prev_corr, dtype=tf.float32), 
             tf.convert_to_tensor(curr_skill, dtype=tf.float32),
             self.logit_pI,
-            logit_probs_prev,
-            logit_probs_curr,
+            probs_prev,
+            probs_curr,
             None if self.states is None else tf.convert_to_tensor(self.states, dtype=tf.float32))
 
         self.states = next_states.numpy()
@@ -61,8 +61,8 @@ def bkt_hmm(new_seqs,
     prev_corr,
     curr_skill,
     logit_pI,
-    logit_probs_prev,
-    logit_probs_curr,
+    probs_prev,
+    probs_curr,
     states):
     
     def _fn(curr_state, curr_input):
@@ -106,9 +106,7 @@ def bkt_hmm(new_seqs,
     curr_skill = tf.transpose(curr_skill, [1,0,2])
 
     # [n_steps, n_batch, 4]
-    probs_prev = tf.sigmoid(logit_probs_prev)
     probs_prev = tf.transpose(probs_prev, [1, 0, 2])
-    probs_curr = tf.sigmoid(logit_probs_curr)
     probs_curr = tf.transpose(probs_curr, [1, 0, 2])
 
     # initialize state to initial learning probability if we're starting a new batch
@@ -118,8 +116,8 @@ def bkt_hmm(new_seqs,
     input_shape = tf.shape(prev_skill)
     n_batch = input_shape[1]
     
-    pi = tf.sigmoid(logit_pI)
     if new_seqs:
+        pi = tf.sigmoid(logit_pI)
         states = tf.tile(tf.transpose(pi), (n_batch, 1))
     
     

@@ -1,6 +1,6 @@
 {
     "model" : "model_standard_bkt",
-    "with_forgetting" : false,
+    "with_forgetting" : true,
     "p_n_batch_seqs" : true,
     "n_batch_seqs" : 0.1,
     "n_batch_trials" : 50,
