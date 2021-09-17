@@ -1,10 +1,10 @@
 {
-    "model" : "bkt",
-    "with_forgetting" : true,
+    "model" : "dkt",
+    "n_hidden" : 100,
     "p_n_batch_seqs" : true,
     "n_batch_seqs" : 0.1,
     "n_batch_trials" : 50,
     "epochs" : 50,
-    "lr" : 0.01,
+    "lr" : 0.001,
     "patience" : 5
 }

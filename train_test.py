@@ -1,10 +1,12 @@
 import numpy as np 
 import pandas as pd
 import sklearn.metrics 
-import model_standard_bkt
+import model_bkt
+import model_dkt 
 
 MAPPING = {
-    "model_standard_bkt" : model_standard_bkt.create_model,
+    "bkt" : model_bkt.create_model,
+    "dkt" : model_dkt.create_model
 }
 
 def train_test(cfg, df, split):

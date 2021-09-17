@@ -6,6 +6,7 @@ import sequence_funcs as sf
 import utils 
 import tensorflow.keras as keras 
 import numpy as np
+import uuid 
 
 class StudentModel:
 
@@ -16,7 +17,7 @@ class StudentModel:
         self.epochs = cfg['epochs']
         self.lr = cfg['lr']
         self.patience = cfg['patience']
-        self.model_params_path = cfg['model_params_path']
+        self.model_params_path = "tmp/%s.npz" % (str(uuid.uuid4()))
 
         self._components = []
         self._init_model_components(self._components)
@@ -71,14 +72,21 @@ class StudentModel:
         trainables = [t[1] for t in trainables]
         return trainables
 
-    def save(self):
+    def save(self, path=None):
         public_params = { k: v for k,v in self.__dict__.items() if not k.startswith('_') }
         comp_params = utils.save_params(self._components)
-        np.savez(self.model_params_path, **public_params, **comp_params)
 
-    def load(self):
+        if path is None:
+            path = self.model_params_path
+        np.savez(path, **public_params, **comp_params)
+
+    def load(self, path=None):
         print("Loading weights ...")
-        d = np.load(self.model_params_path)
+
+        if path is None:
+            path = self.model_params_path
+
+        d = np.load(path)
         utils.load_params(self._components, d)
 
     def train(self, train_df, valid_df):
@@ -95,7 +103,8 @@ class StudentModel:
         for e in range(self.epochs):
             batch_losses = []
             for features, new_seqs in self._iterate(train_seqs, shuffle=True):
-
+                
+                print("Batch %d" % len(batch_losses))
                 with tf.GradientTape() as t:
                     ypred = self._run_model(features, new_seqs)
                     current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)

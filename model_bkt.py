@@ -9,9 +9,9 @@ import student_model
 def create_model(cfg, df):
 
     max_kc_id = np.max(df['skill'])
-    return StandardBktModel(max_kc_id, cfg)
+    return BktModel(max_kc_id, cfg)
     
-class StandardBktModel(student_model.StudentModel):
+class BktModel(student_model.StudentModel):
 
     def __init__(self, max_kc_id, cfg):
 

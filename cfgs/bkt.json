@@ -1,11 +1,10 @@
 {
-    "model" : "model_standard_bkt",
+    "model" : "bkt",
     "with_forgetting" : false,
     "p_n_batch_seqs" : true,
     "n_batch_seqs" : 0.1,
     "n_batch_trials" : 50,
     "epochs" : 50,
     "lr" : 0.01,
-    "patience" : 5,
-    "model_params_path" : "tmp/model_standard_bkt_params.npz"
+    "patience" : 5
 }
