@@ -1,0 +1,14 @@
+{
+    "model" : "bkt-sd",
+    "n_groups" : 10,
+    "with_forgetting" : true,
+    "p_n_batch_seqs" : true,
+    "n_batch_seqs" : 0.1,
+    "n_batch_trials" : 50,
+    "n_batch_seqs_testing" : 0.25,
+    "epochs" : 50,
+    "lr" : 0.1,
+    "patience" : 5,
+    "n_samples" : 100,
+    "temperature" : 0.5
+}

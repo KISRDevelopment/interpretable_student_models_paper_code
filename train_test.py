@@ -4,11 +4,13 @@ import sklearn.metrics
 import model_bkt
 import model_dkt 
 import model_ldkt 
+import model_bkt_skill_discovery
 
 MAPPING = {
     "bkt" : model_bkt.create_model,
     "dkt" : model_dkt.create_model,
-    "ldkt" : model_ldkt.create_model
+    "ldkt" : model_ldkt.create_model,
+    "bkt-sd" : model_bkt_skill_discovery.create_model
 }
 
 def train_test(cfg, df, split):

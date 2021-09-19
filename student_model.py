@@ -18,7 +18,7 @@ class StudentModel:
         self.lr = cfg['lr']
         self.patience = cfg['patience']
         self.model_params_path = "tmp/%s.npz" % (str(uuid.uuid4()))
-
+        self.n_batch_seqs_testing = cfg['n_batch_seqs_testing']
         self._components = []
         self._init_model_components(self._components)
 
@@ -53,14 +53,18 @@ class StudentModel:
 # End of functions that need to be customized
 #
 
-    def _iterate(self, seqs, shuffle=False):
+    def _iterate(self, seqs, shuffle=False, testing=False):
         """
             Iterates over sequences in batches
         """
         n_batch_seqs = self.n_batch_seqs
+        if testing:
+            n_batch_seqs = self.n_batch_seqs_testing
+        
         if self.p_n_batch_seqs:
             n_batch_seqs = int(n_batch_seqs * len(seqs))
-            print("Effective batchsize: (%d,%d)" % (n_batch_seqs, self.n_batch_trials))
+        
+            #print("Effective batchsize: (%d,%d)" % (n_batch_seqs, self.n_batch_trials))
         return sf.create_loader(seqs, n_batch_seqs, self.n_batch_trials, self._create_feature_transformer() , shuffle=shuffle)
 
 
@@ -106,7 +110,7 @@ class StudentModel:
                 
                 print("Batch %d" % len(batch_losses))
                 with tf.GradientTape() as t:
-                    ypred = self._run_model(features, new_seqs)
+                    ypred = self._run_model(features, new_seqs, testing=False)
                     current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
 
                 trainables = self.get_trainables(new_seqs)
@@ -116,15 +120,8 @@ class StudentModel:
 
                 batch_losses.append(current_loss.numpy())
             
-            # compute validation loss
-            valid_batch_losses = []
-            for features, new_seqs in self._iterate(valid_seqs, shuffle=False):
-                ypred = self._run_model(features, new_seqs)
-                current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
-
-                valid_batch_losses.append(current_loss.numpy())
-            valid_loss = np.mean(valid_batch_losses)
-
+            valid_loss = self.evaluate(valid_seqs)
+            
             if valid_loss < min_loss:
                 min_loss = valid_loss
                 self.save()
@@ -132,7 +129,7 @@ class StudentModel:
             else:
                 waited += 1
             
-            print("Epoch %d, First Trial = %d, Running loss = %8.4f, Validation loss = %8.2f" % (e, new_seqs, np.mean(batch_losses), np.mean(valid_batch_losses)))
+            print("Epoch %d, First Trial = %d, Train loss = %8.4f, Validation loss = %8.2f" % (e, new_seqs, np.mean(batch_losses), valid_loss))
 
             if waited >= self.patience:
                 break
@@ -140,16 +137,35 @@ class StudentModel:
         # restore 
         self.load()
 
+    def evaluate(self, seqs):
+
+        # compute validation loss
+        valid_batch_losses = []
+        for features, new_seqs in self._iterate(seqs, shuffle=False, testing=True):
+            ypred = self._run_model(features, new_seqs, testing=True)
+            current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
+
+            valid_batch_losses.append(current_loss.numpy())
+        valid_loss = np.mean(valid_batch_losses)
+
+        return valid_loss 
+
     def predict(self, df):
 
         seqs = self._make_seqs(df)
-        preds = np.zeros(df.shape[0])
-        for features, new_seqs in self._iterate(seqs, shuffle=False):
-            ypred = self._run_model(features, new_seqs)
-            for i in range(ypred.shape[0]):
-                for j in range(ypred.shape[1]):
-                    trial_index = features.trial_index[i,j]
-                    if trial_index > -1:
-                        preds[trial_index] = ypred[i,j]
+        return self.predict_seqs(df.shape[0], seqs)
+
+    def predict_seqs(self, n, seqs):
+        preds = np.zeros(n)
+        for features, new_seqs in self._iterate(seqs, shuffle=False, testing=True):
+            ypred = self._run_model(features, new_seqs, testing=True)
+            flat_preds = ypred.numpy().flatten()
+            flat_indecies = features.trial_index.flatten()
+
+            ix = flat_indecies > -1
+            flat_preds = flat_preds[ix]
+            flat_indecies = flat_indecies[ix]
+
+            preds[flat_indecies] = flat_preds
 
         return preds 
