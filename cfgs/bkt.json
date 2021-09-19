@@ -3,6 +3,7 @@
     "with_forgetting" : false,
     "p_n_batch_seqs" : true,
     "n_batch_seqs" : 0.1,
+    "n_batch_seqs_testing" : 0.25,
     "n_batch_trials" : 50,
     "epochs" : 50,
     "lr" : 0.01,

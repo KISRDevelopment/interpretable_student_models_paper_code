@@ -41,7 +41,7 @@ class LdktModel(student_model.StudentModel):
 
         return seqs 
 
-    def _run_model(self, features, new_seqs):
+    def _run_model(self, features, new_seqs, testing=False):
         """
             Executes the model
         """

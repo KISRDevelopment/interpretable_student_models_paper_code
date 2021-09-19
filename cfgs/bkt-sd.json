@@ -1,6 +1,6 @@
 {
     "model" : "bkt-sd",
-    "n_groups" : 10,
+    "n_groups" : 20,
     "with_forgetting" : true,
     "p_n_batch_seqs" : true,
     "n_batch_seqs" : 0.1,
