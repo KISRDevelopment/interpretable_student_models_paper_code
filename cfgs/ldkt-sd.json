@@ -1,0 +1,13 @@
+{
+    "model" : "ldkt-sd",
+    "p_n_batch_seqs" : true,
+    "n_groups" : 10,
+    "n_batch_seqs" : 0.1,
+    "n_batch_seqs_testing" : 0.25,
+    "n_batch_trials" : 50,
+    "epochs" : 50,
+    "lr" : 0.1,
+    "patience" : 5,
+    "temperature" : 0.5,
+    "n_samples" : 100
+}
