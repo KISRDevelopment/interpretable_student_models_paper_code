@@ -6,6 +6,8 @@ import model_dkt
 import model_ldkt 
 import model_bkt_skill_discovery
 import model_ldkt_skill_discovery
+import utils 
+
 MAPPING = {
     "bkt" : model_bkt.create_model,
     "dkt" : model_dkt.create_model,
@@ -25,15 +27,28 @@ def train_test(cfg, df, split):
     test_df = df[test_ix]
 
     print("Training: %d, Validation: %d, Test: %d" % (train_df.shape[0], valid_df.shape[0], test_df.shape[0]))
-    model = MAPPING[cfg['model']](cfg, df)
 
-    model.train(train_df, valid_df)
+    # perform hyper parameter optimization
+    min_loss = float("inf")
+    best_model = None
+    best_combination = None
+    for comb in utils.hyperparam_combs(cfg['hyperparams']):
+        cfg.update(comb)
 
+        print(cfg)
+        model = MAPPING[cfg['model']](cfg, df)
+        loss = model.train(train_df, valid_df)
+
+        if loss < min_loss:
+            min_loss = loss
+            best_model = model
+            best_combination = comb
+    
     # sweep decision thresholds on validation set and pick one that achieves highest BACC
     thresholds = np.linspace(0, 1, 50)
     baccs = np.zeros_like(thresholds)
     ytrue_valid = np.array(valid_df['correct'])
-    preds_valid = model.predict(valid_df)
+    preds_valid = best_model.predict(valid_df)
 
     for i in range(len(thresholds)):
         t = thresholds[i]
@@ -44,7 +59,7 @@ def train_test(cfg, df, split):
     best_threshold = thresholds[ix]
     print("Decision threshold: %0.2f" % best_threshold)
 
-    preds = model.predict(test_df)
+    preds = best_model.predict(test_df)
     actual = np.array(test_df['correct'])
 
     xe = -(actual * np.log(preds) + (1-actual) * np.log(1-preds))
@@ -64,7 +79,8 @@ def train_test(cfg, df, split):
         "auc-roc" : auc,
         "threshold" : best_threshold,
         "bacc" : bacc,
-        "cm" : cm.tolist()
+        "cm" : cm.tolist(),
+        "best_combination" : best_combination
     }
 
 if __name__ == "__main__":
@@ -86,4 +102,7 @@ if __name__ == "__main__":
 
     split = splits[split_id, :]
 
-    train_test(cfg, df, split)
+    r = train_test(cfg, df, split)
+
+    print(r)
+    

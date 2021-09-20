@@ -108,7 +108,7 @@ class StudentModel:
             batch_losses = []
             for features, new_seqs in self._iterate(train_seqs, shuffle=True):
                 
-                print("Batch %d" % len(batch_losses))
+                #print("Batch %d" % len(batch_losses))
                 with tf.GradientTape() as t:
                     ypred = self._run_model(features, new_seqs, testing=False)
                     current_loss = utils.xe_loss(features.curr_corr, ypred, features.curr_mask)
@@ -129,13 +129,15 @@ class StudentModel:
             else:
                 waited += 1
             
-            print("Epoch %d, First Trial = %d, Train loss = %8.4f, Validation loss = %8.2f" % (e, new_seqs, np.mean(batch_losses), valid_loss))
+            print("Epoch %d, First Trial = %d, Train loss = %8.4f, Validation loss = %8.4f" % (e, new_seqs, np.mean(batch_losses), valid_loss))
 
             if waited >= self.patience:
                 break
         
         # restore 
         self.load()
+
+        return min_loss 
 
     def evaluate(self, seqs):
 

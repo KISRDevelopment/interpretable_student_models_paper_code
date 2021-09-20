@@ -1,6 +1,5 @@
 {
     "model" : "bkt-sd",
-    "n_groups" : 20,
     "with_forgetting" : true,
     "p_n_batch_seqs" : true,
     "n_batch_seqs" : 0.1,
@@ -9,6 +8,9 @@
     "epochs" : 50,
     "lr" : 0.1,
     "patience" : 5,
-    "n_samples" : 100,
-    "temperature" : 0.5
+    "n_samples" : 20,
+    "hyperparams" : {
+        "temperature" : [0.1, 0.5, 1, 5],
+        "n_groups" : [5, 10, 20, 50]
+    }
 }

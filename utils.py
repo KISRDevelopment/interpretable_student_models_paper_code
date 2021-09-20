@@ -1,4 +1,6 @@
 import tensorflow as tf
+import itertools
+
 def min_seq_len_filter(df, val):
     
     by_student = df.groupby('student').size()
@@ -28,3 +30,11 @@ def save_params(components):
         for name, p in component.trainables:
             params[name] = p.numpy()
     return params
+
+
+def hyperparam_combs(d):
+    
+    keys = sorted(d.keys())
+    sets = [d[k] for k in keys]
+    
+    return [ dict(zip(keys, s)) for s in itertools.product(*sets) ]
