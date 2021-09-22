@@ -76,14 +76,21 @@ class StudentModel:
         trainables = [t[1] for t in trainables]
         return trainables
 
-    def save(self, path=None):
+    def get_params(self):
         public_params = { k: v for k,v in self.__dict__.items() if not k.startswith('_') }
         comp_params = utils.save_params(self._components)
+        p = { **public_params, **comp_params }
+        return p 
 
+    def save(self, path=None):
+        p = self.get_params()
         if path is None:
             path = self.model_params_path
-        np.savez(path, **public_params, **comp_params)
+        np.savez(path, **p)
 
+    def load_params(self, p):
+        utils.load_params(self._components, p)
+    
     def load(self, path=None):
         print("Loading weights ...")
 
@@ -91,7 +98,7 @@ class StudentModel:
             path = self.model_params_path
 
         d = np.load(path)
-        utils.load_params(self._components, d)
+        self.load_params(d)
 
     def train(self, train_df, valid_df):
         
@@ -103,6 +110,7 @@ class StudentModel:
 
         # train
         min_loss = float("inf")
+        best_params = None
         waited = 0
         for e in range(self.epochs):
             batch_losses = []
@@ -122,9 +130,12 @@ class StudentModel:
             
             valid_loss = self.evaluate(valid_seqs)
             
+            if np.isnan(valid_loss):
+                break
             if valid_loss < min_loss:
                 min_loss = valid_loss
-                self.save()
+                #self.save()
+                best_params = self.get_params()
                 waited = 0
             else:
                 waited += 1
@@ -135,7 +146,7 @@ class StudentModel:
                 break
         
         # restore 
-        self.load()
+        self.load_params(best_params)
 
         return min_loss 
 

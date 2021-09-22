@@ -8,7 +8,7 @@ def main(path):
     with open(path, 'r') as f:
         output = json.load(f)
     
-    results = output['results']
+    results = output
     print("Number of splits: %d" % len(results))
     baccs = []
     rocs = []

@@ -7,6 +7,8 @@ import model_ldkt
 import model_bkt_skill_discovery
 import model_ldkt_skill_discovery
 import utils 
+from multiprocessing import Pool, TimeoutError, Manager
+import copy 
 
 MAPPING = {
     "bkt" : model_bkt.create_model,
@@ -16,11 +18,11 @@ MAPPING = {
     "ldkt-sd" : model_ldkt_skill_discovery.create_model
 }
 
-def train_test(cfg, df, split):
+def train_test(cfg, df, split, train_id, valid_id, test_id, model_params_path=None):
 
-    train_ix = split == 2
-    valid_ix = split == 1
-    test_ix = split == 0
+    train_ix = split == train_id
+    valid_ix = split == valid_id
+    test_ix = split == test_id
 
     train_df = df[train_ix]
     valid_df = df[valid_ix]
@@ -28,27 +30,19 @@ def train_test(cfg, df, split):
 
     print("Training: %d, Validation: %d, Test: %d" % (train_df.shape[0], valid_df.shape[0], test_df.shape[0]))
 
-    # perform hyper parameter optimization
-    min_loss = float("inf")
-    best_model = None
-    best_combination = None
-    for comb in utils.hyperparam_combs(cfg['hyperparams']):
-        cfg.update(comb)
-
-        print(cfg)
-        model = MAPPING[cfg['model']](cfg, df)
-        loss = model.train(train_df, valid_df)
-
-        if loss < min_loss:
-            min_loss = loss
-            best_model = model
-            best_combination = comb
+    # train model        
+    model = MAPPING[cfg['model']](cfg, df)
+    if model_params_path is None:
+        model.train(train_df, valid_df)
+        model.save()
+    else:
+        model.load(model_params_path)
     
     # sweep decision thresholds on validation set and pick one that achieves highest BACC
     thresholds = np.linspace(0, 1, 50)
     baccs = np.zeros_like(thresholds)
     ytrue_valid = np.array(valid_df['correct'])
-    preds_valid = best_model.predict(valid_df)
+    preds_valid = model.predict(valid_df)
 
     for i in range(len(thresholds)):
         t = thresholds[i]
@@ -59,7 +53,7 @@ def train_test(cfg, df, split):
     best_threshold = thresholds[ix]
     print("Decision threshold: %0.2f" % best_threshold)
 
-    preds = best_model.predict(test_df)
+    preds = model.predict(test_df)
     actual = np.array(test_df['correct'])
 
     xe = -(actual * np.log(preds) + (1-actual) * np.log(1-preds))
@@ -80,7 +74,7 @@ def train_test(cfg, df, split):
         "threshold" : best_threshold,
         "bacc" : bacc,
         "cm" : cm.tolist(),
-        "best_combination" : best_combination
+        "model_params_path" : model.model_params_path
     }
 
 if __name__ == "__main__":
@@ -92,6 +86,14 @@ if __name__ == "__main__":
     df_path = sys.argv[2]
     split_path = sys.argv[3]
     split_id = int(sys.argv[4])
+    output_path = sys.argv[5]
+    train_id, valid_id, test_id = 2, 1, 0
+    if len(sys.argv) > 6:
+        train_id, valid_id, test_id = int(sys.argv[6]), int(sys.argv[7]), int(sys.argv[8])
+   
+    model_params_path = None
+    if len(sys.argv) > 9:
+        model_params_path = sys.argv[9]
 
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
@@ -102,7 +104,11 @@ if __name__ == "__main__":
 
     split = splits[split_id, :]
 
-    r = train_test(cfg, df, split)
+    r = train_test(cfg, df, split, train_id, valid_id, test_id, model_params_path)
 
     print(r)
+
+    r['cfg'] = cfg
+    with open(output_path, 'w') as f:
+        json.dump(r, f, indent=4, cls=utils.NumpyEncoder)
     
