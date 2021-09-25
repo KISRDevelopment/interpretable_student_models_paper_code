@@ -22,6 +22,7 @@ def main(cfg_path, df_path, splits_path, split_id, final_output_path, n_workers,
     output_paths = []
     finished = 0
     for i in range(0, len(cfg_paths), n_workers):
+        
         subset = cfg_paths[i:(i+n_workers)]
         processes = []
         for cfg_path in subset:
@@ -53,7 +54,14 @@ def main(cfg_path, df_path, splits_path, split_id, final_output_path, n_workers,
             print("Finished %d" % finished)
         
     # get results
-    results = [utils.load_json(p[1]) for p in output_paths]
+    results = []
+    for p in output_paths:
+        if os.path.exists(p[1]):
+            r = utils.load_json(p[1])
+            results.append(r)
+        else:
+            print("Warning: No output from %s" % p)
+        
     
     # pick the best on the validation set
     best_result_ix = min(range(len(results)), key=lambda r: results[r]['xe'])

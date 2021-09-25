@@ -54,3 +54,26 @@ class DktModel(student_model.StudentModel):
         """
         return sf.create_kt_transformer(self.n_kcs)
 
+    def load(self, path=None):
+        # to get the trainables
+        self._dummy_run()
+        super().load(path)
+
+    def _dummy_run(self):
+        n_batch = self.n_batch_seqs
+        n_steps = self.n_batch_trials
+        n_kcs = self.n_kcs
+        with tf.GradientTape() as tape:
+            ypred = self._rnn_module(
+                np.ones((n_batch, n_steps, n_kcs), dtype=np.float32),
+                np.ones((n_batch, n_steps), dtype=np.float32), 
+                np.ones((n_batch, n_steps, n_kcs), dtype=np.float32), 
+                True, 
+                np.ones((n_batch, n_steps, 1), dtype=np.float32))
+            current_loss = utils.xe_loss(np.ones((n_batch, n_steps), dtype=np.float32), ypred, np.ones((n_batch, n_steps), dtype=np.float32))
+        
+        # now trainables are available!
+        self._rnn_module.get_trainables(True)
+
+
+

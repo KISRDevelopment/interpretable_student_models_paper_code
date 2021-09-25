@@ -75,6 +75,7 @@ def featurize_seqs(seqs, cols_to_monitor):
     
     return featurized_seqs
 
+
 def create_loader(seqs, n_batch_seqs, n_batch_trials, transformer, shuffle=True):
     
     if shuffle:
@@ -155,41 +156,42 @@ def create_kt_transformer(n_kcs):
 
 if __name__ == "__main__":
 
-    rows = [
-        { "student" : 0, "correct" : 1, "skill" : 0 },
-        { "student" : 0, "correct" : 0, "skill" : 1 },
-        { "student" : 1, "correct" : 0, "skill" : 1 },
-        { "student" : 0, "correct" : 1, "skill" : 2 },
-        { "student" : 1, "correct" : 0, "skill" : 0 },
-        { "student" : 1, "correct" : 1, "skill" : 2 },
-        { "student" : 1, "correct" : 1, "skill" : 2 },
-        { "student" : 1, "correct" : 1, "skill" : 1 },
-    ]
-    df = pd.DataFrame(rows)
+    # rows = [
+    #     { "student" : 0, "correct" : 1, "skill" : 0 },
+    #     { "student" : 0, "correct" : 0, "skill" : 1 },
+    #     { "student" : 1, "correct" : 0, "skill" : 1 },
+    #     { "student" : 0, "correct" : 1, "skill" : 2 },
+    #     { "student" : 1, "correct" : 0, "skill" : 0 },
+    #     { "student" : 1, "correct" : 1, "skill" : 2 },
+    #     { "student" : 1, "correct" : 1, "skill" : 2 },
+    #     { "student" : 1, "correct" : 1, "skill" : 1 },
+    # ]
+    # df = pd.DataFrame(rows)
 
-    seqs = make_sequences(df, 'student')
-    for s in seqs:
-        for e in s:
-            print(e)
-        print()
+    # seqs = make_sequences(df, 'student')
+    # for s in seqs:
+    #     for e in s:
+    #         print(e)
+    #     print()
 
-    seqs = pad_seqs(seqs, 4)
+    # seqs = pad_seqs(seqs, 4)
 
-    for s in seqs:
-        for e in s:
-            print(e)
-        print()
+    # for s in seqs:
+    #     for e in s:
+    #         print(e)
+    #     print()
     
-    featurized_seqs = featurize_seqs(seqs, {
-        "correct" : 0,
-        "skill" : 3
-    })
+    # featurized_seqs = featurize_seqs(seqs, {
+    #     "correct" : 0,
+    #     "skill" : 3
+    # })
 
-    for s in featurized_seqs:
-        for e in s:
-            print(e)
-        print()
+    # for s in featurized_seqs:
+    #     for e in s:
+    #         print(e)
+    #     print()
 
-    for features, new_seqs in create_loader(featurized_seqs, 2, 4, create_kt_transformer(3)):
-        print(features)
-        print(new_seqs)
+    # for features, new_seqs in create_loader(featurized_seqs, 2, 4, create_kt_transformer(3)):
+    #     print(features)
+    #     print(new_seqs)
+    pass

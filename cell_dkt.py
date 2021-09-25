@@ -11,13 +11,17 @@ class DktCell(object):
         self._gru = keras.layers.GRU(n_hidden, return_sequences=True, return_state=True, name='gru')
         self._output = keras.layers.Dense(n_kcs, activation='sigmoid', name='kc')
 
+        
+
     def get_trainables(self, new_seqs):
+        
         trainables = []
         trainables.extend([(t.name,t) for t in self._gru.trainable_variables])
         trainables.extend([(t.name,t) for t in self._output.trainable_variables])
         self.trainables = trainables
-        return trainables
-    
+
+        return trainables 
+        
     def __call__(self, prev_skill, prev_corr, curr_skill, new_seqs, extra_features):
         """
             prev_skill [n_batch, n_steps, n_skills]     Skill encountered at previous time step (one-hot)
@@ -51,8 +55,10 @@ class DktCell(object):
 
         # calculate KC probs [n_batch, n_steps, n_kcs]
         kc_probs = self._output(seq_output)
+        
         ypred = tf.reduce_sum(kc_probs * curr_skill, axis=2)
-
+        ypred = tf.clip_by_value(ypred, 0.001, 0.999)
+    
         self.states = next_states.numpy()
         
         return ypred 

@@ -28,9 +28,7 @@ def main(path):
     mean_cms = np.mean(cms, axis=0)
 
     print("Mean Balanced Accuracy: %.2f" % mean_bacc)
-    print("Mean AUC-ROC:")
-    print("  ", end='')
-    print(mean_rocs)
+    print("Mean AUC-ROC: %0.2f" % mean_rocs)
     print("Mean Confusion Matrix:")
     print_matrix(mean_cms)
 

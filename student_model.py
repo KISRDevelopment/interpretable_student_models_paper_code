@@ -130,8 +130,8 @@ class StudentModel:
             
             valid_loss = self.evaluate(valid_seqs)
             
-            if np.isnan(valid_loss):
-                break
+            # if np.isnan(valid_loss):
+            #     break
             if valid_loss < min_loss:
                 min_loss = valid_loss
                 #self.save()
