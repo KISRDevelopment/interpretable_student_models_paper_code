@@ -120,6 +120,26 @@ class KCAssignmentModule:
         # sample an assignment [n_kcs, n_groups]
         S = dist.sample()
 
+        # quantize it
+        S = quantize(S)
+
         return S 
 
+@tf.custom_gradient
+def quantize(x):
+    """
+        x: [n_kcs, n_groups]
+    """
     
+    n_groups = x.shape[1]
+
+    # quantize it
+    x = tf.one_hot(tf.argmax(x, axis=1), depth = n_groups)
+    
+    def grad(dy):
+        """
+            Pass the gradient straight through ...
+        """
+        return dy
+    
+    return x, grad

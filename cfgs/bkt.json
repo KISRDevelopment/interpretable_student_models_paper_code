@@ -1,11 +1,14 @@
 {
     "model" : "bkt",
     "with_forgetting" : true,
-    "p_n_batch_seqs" : true,
-    "n_batch_seqs" : 0.1,
-    "n_batch_seqs_testing" : 0.25,
+    "p_n_batch_seqs" : false,
+    "n_batch_seqs" : 100,
     "n_batch_trials" : 50,
-    "epochs" : 50,
+    "n_batch_seqs_testing" : 500,
+    "epochs" : 100,
     "lr" : 0.01,
-    "patience" : 5
+    "patience" : 5,
+    "hyperparams" : {
+        "lr" : [0.1, 0.01]
+    }
 }

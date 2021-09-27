@@ -4,7 +4,7 @@ import utils
 import copy
 import os 
 
-def main(cfg_path, df_path, splits_path, split_id, final_output_path, n_workers, show_output=False):
+def main(cfg_path, df_path, splits_path, split_id, final_output_path, n_workers, show_output=True):
 
     cfg = utils.load_json(cfg_path)
     basename = os.path.basename(cfg_path).replace('.json','')
