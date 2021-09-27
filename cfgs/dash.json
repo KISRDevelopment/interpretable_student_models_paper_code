@@ -1,0 +1,12 @@
+{
+    "model" : "dash",
+    "n_batch_trials" : 500,
+    "n_batch_trials_testing" : 5000,
+    "epochs" : 100,
+    "n_samples" : 20,
+    "lr" : 0.1,
+    "n_windows" : 8,
+    "patience" : 10,
+    "n_groups" : 10,
+    "temperature" : 0.5
+}
