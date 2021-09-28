@@ -32,12 +32,12 @@ class DashModel:
         self.max_kc_id = max_kc_id
         self.n_kcs = self.max_kc_id + 1
 
-        self._model = keras.layers.Dense(1, activation='linear')
+        self._coeff = tf.Variable(tf.random.normal((self.n_groups,2*self.n_windows+1), mean=0, stddev=0.1), name="dash_coeff")
         self._kca_module = KCAssignmentModule(self.n_kcs, self.n_groups)
 
     def get_trainables(self):
         trainables = []
-        trainables.extend([(t.name,t) for t in self._model.trainable_variables])
+        trainables.extend([(self._coeff.name,self._coeff)])
         trainables.extend(self._kca_module.trainables)
 
         return trainables
@@ -53,7 +53,7 @@ class DashModel:
         self.lossf = keras.losses.BinaryCrossentropy(from_logits=True)
 
         # train
-        n_batch_trials = int(train_df.shape[0] * 0.1)
+        n_batch_trials = int(train_df.shape[0] * 0.05)
         print("Batch trials: %d" % n_batch_trials)
         min_loss = float("inf")
         best_params = None
@@ -169,7 +169,7 @@ class DashModel:
         Ft = tf.transpose(Ft, [0, 2, 1])
 
         # [n_batch, n_groups]
-        logit_p = tf.squeeze(self._model(tf.convert_to_tensor(Ft, dtype=tf.float32)))
+        logit_p = tf.reduce_sum(Ft * self._coeff, axis=2)
 
         curr_group = tf.matmul(curr_skill, S)
 
