@@ -6,6 +6,7 @@ import numpy as np
 import cell_ldkt
 import student_model
 import tensorflow_probability as tfp
+from model_bkt_skill_discovery import KCAssignmentModule
 
 def create_model(cfg, df):
 
@@ -97,29 +98,3 @@ class LdktSkillDiscoveryModel(student_model.StudentModel):
             Transforms features into numeric arrays
         """
         return sf.create_kt_transformer(self.n_kcs)
-
-class KCAssignmentModule:
-
-
-    def __init__(self, n_kcs, n_groups):
-        self.n_kcs = n_kcs
-        self.n_groups = n_groups 
-        
-        self.logit_probs_kc_assignment = tf.Variable(tf.random.normal((n_kcs, n_groups), mean=0, stddev=0.1), name="logit_probs_kc_assignment")
-
-        self.trainables = [
-            ('logit_probs_kc_assignment', self.logit_probs_kc_assignment)
-        ]
-    
-    def get_trainables(self, new_seqs):
-        return self.trainables
-    
-    def __call__(self, temperature):
-        dist = tfp.distributions.RelaxedOneHotCategorical(temperature, logits=self.logit_probs_kc_assignment)
-        
-        # sample an assignment [n_kcs, n_groups]
-        S = dist.sample()
-
-        return S 
-
-    

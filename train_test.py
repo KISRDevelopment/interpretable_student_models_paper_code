@@ -6,7 +6,7 @@ import model_dkt
 import model_ldkt 
 import model_bkt_skill_discovery
 import model_ldkt_skill_discovery
-import model_dash
+import model_dash_alt
 import utils 
 from multiprocessing import Pool, TimeoutError, Manager
 import copy 
@@ -17,7 +17,7 @@ MAPPING = {
     "ldkt" : model_ldkt.create_model,
     "bkt-sd" : model_bkt_skill_discovery.create_model,
     "ldkt-sd" : model_ldkt_skill_discovery.create_model,
-    "dash" : model_dash.create_model
+    "dash" : model_dash_alt.create_model
 }
 
 def train_test(cfg, df, split, train_id, valid_id, test_id, model_params_path=None):

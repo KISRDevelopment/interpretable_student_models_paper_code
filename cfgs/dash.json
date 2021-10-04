@@ -1,12 +1,14 @@
 {
     "model" : "dash",
-    "n_batch_trials" : 500,
+    "p_batch_trials" : 0.05,
     "n_batch_trials_testing" : 20000,
     "epochs" : 100,
-    "n_samples" : 100,
     "lr" : 0.01,
     "n_windows" : 5,
     "patience" : 5,
-    "n_groups" : 5,
-    "temperature" : 1.5
+    "n_groups" : 10,
+    "hyperparams" : {
+        "n_groups" : [1, 10, 20, 50],
+        "lr" : [0.1, 0.01]
+    }
 }

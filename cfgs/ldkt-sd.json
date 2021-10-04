@@ -1,13 +1,18 @@
 {
     "model" : "ldkt-sd",
-    "p_n_batch_seqs" : true,
+    "p_n_batch_seqs" : false,
     "n_groups" : 10,
-    "n_batch_seqs" : 0.1,
-    "n_batch_seqs_testing" : 0.25,
+    "n_batch_seqs" : 100,
+    "n_batch_seqs_testing" : 1000,
     "n_batch_trials" : 50,
-    "epochs" : 50,
+    "epochs" : 100,
     "lr" : 0.1,
     "patience" : 5,
     "temperature" : 0.5,
-    "n_samples" : 100
+    "n_samples" : 20,
+    "hyperparams" : {
+        "lr" : [0.1, 0.01],
+        "temperature" : [0.5, 1.0],
+        "n_groups" : [1, 10, 20, 50]
+    }
 }
