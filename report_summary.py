@@ -27,6 +27,6 @@ def main(models, datasets, metric):
     
     print(df)
 if __name__ == "__main__":
-    main( ['bkt', 'bkt-sd', 'ldkt-sd', 'dash', 'dkt'],
+    main( ['bkt', 'bkt-sd', 'ldkt-sd', 'dash-sd', 'dash', 'dkt'],
           ['algebra2010', 'assistment', 'junyi', 'kdd2010', 'statics2011', 'synthetic'],
           'roc' )

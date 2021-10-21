@@ -101,10 +101,11 @@ class BktSkillDiscoveryModel(student_model.StudentModel):
 class KCAssignmentModule:
 
 
-    def __init__(self, n_kcs, n_groups):
+    def __init__(self, n_kcs, n_groups, quantized=True):
         self.n_kcs = n_kcs
         self.n_groups = n_groups 
-        
+        self.quantized = quantized
+
         self.logit_probs_kc_assignment = tf.Variable(tf.random.normal((n_kcs, n_groups), mean=0, stddev=0.1), name="logit_probs_kc_assignment")
 
         self.trainables = [
@@ -121,7 +122,8 @@ class KCAssignmentModule:
         S = dist.sample()
 
         # quantize it
-        S = quantize(S)
+        if self.quantized:
+            S = quantize(S)
 
         return S 
 

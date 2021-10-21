@@ -6,9 +6,9 @@
     "n_batch_seqs_testing" : 1000,
     "n_batch_trials" : 50,
     "epochs" : 100,
-    "lr" : 0.1,
+    "lr" : 0.01,
     "patience" : 5,
-    "temperature" : 0.5,
+    "temperature" : 1,
     "n_samples" : 20,
     "hyperparams" : {
         "lr" : [0.1, 0.01],
