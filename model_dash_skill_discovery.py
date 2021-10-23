@@ -9,7 +9,7 @@ import numpy as np
 from collections import defaultdict, namedtuple
 import numpy.random as rng
 from model_bkt_skill_discovery import KCAssignmentModule
-
+from numba import jit
 import tensorflow_probability as tfp
 
 def create_model(cfg, df):
@@ -249,7 +249,7 @@ def to_matrix_format(seq, n_kcs):
 
     return KC_seq, corr_seq, index_seq
 
-
+@jit(nopython=True)
 def make_dash_features(KC_seq, corr_seq, n_windows):
     """
         KC_seq: n_trials x n_kcs
@@ -261,7 +261,7 @@ def make_dash_features(KC_seq, corr_seq, n_windows):
     """
     n_trials, n_kcs = KC_seq.shape
 
-    F_opp = np.zeros((n_trials, n_kcs, n_windows), dtype=int)
+    F_opp = np.zeros((n_trials, n_kcs, n_windows))
     F_corr = np.zeros_like(F_opp)
     for w in range(n_windows):
         window_size = 2 ** w 
@@ -283,53 +283,6 @@ def make_dash_features(KC_seq, corr_seq, n_windows):
 
     return F_opp, F_corr 
 
-
-# def vectorize(seqs, n_kcs, n_windows):
-    
-#     n_seqs = len(seqs)
-
-#     list_F, list_curr_skill, list_curr_correct, list_curr_index = [], [], [], []
-#     for seq in seqs:
-#         curr_skill, curr_correct, curr_index = to_matrix_format(seq, n_kcs)
-#         F_opp, F_corr = make_dash_features(curr_skill, curr_correct, n_windows)
-#         F = np.concatenate((F_opp, F_corr), axis=2)
-
-#         list_F.append(F)
-#         list_curr_skill.append(curr_skill)
-#         list_curr_correct.append(curr_correct)
-#         list_curr_index.extend(curr_index)
-
-#     F = np.vstack(list_F)
-#     curr_skill = np.vstack(list_curr_skill)
-#     curr_correct = np.vstack(list_curr_correct)
-#     curr_index = np.array(list_curr_index)
-
-#     F = np.concatenate((np.ones((F.shape[0], F.shape[1], 1)), np.log(1+F)), axis=2)
-#     #F = np.ones((F.shape[0], F.shape[1], 1))
-
-#     return F, curr_skill, curr_correct, curr_index 
-
-# def create_loader(F, curr_skill, curr_correct, curr_index, n_batch_trials, shuffle=True):
-
-#     DashFeatures = namedtuple('DashFeatures', 'F curr_skill curr_correct trial_index')
-
-#     if shuffle:
-#         ix = rng.permutation(F.shape[0])
-#         F = F[ix,:,:]
-#         curr_skill = curr_skill[ix,:]
-#         curr_correct = curr_correct[ix,:]
-#         curr_index = curr_index[ix]
-    
-
-#     for start in range(0, F.shape[0], n_batch_trials):
-#         endoffset = start + n_batch_trials
-
-#         batch_F = F[start:endoffset,:,:]
-#         batch_curr_skill = curr_skill[start:endoffset,:]
-#         batch_curr_correct = curr_correct[start:endoffset,:]
-#         batch_curr_index = curr_index[start:endoffset]
-
-#         yield DashFeatures(batch_F, batch_curr_skill, batch_curr_correct, batch_curr_index)
 
 DashFeatures = namedtuple('DashFeatures', 'F curr_skill curr_correct trial_index')
 

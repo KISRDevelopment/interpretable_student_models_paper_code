@@ -49,6 +49,18 @@ class StudentModel:
             Transforms features into numeric arrays
         """
         pass
+    
+    def _post_update(self):
+        """
+            Gets called after gradient update
+        """
+        pass
+    
+    def _on_before_training(self, train_df, valid_df):
+        """
+            Gets called just before training starts
+        """
+        pass
 #
 # End of functions that need to be customized
 #
@@ -102,6 +114,8 @@ class StudentModel:
 
     def train(self, train_df, valid_df):
         
+        self._on_before_training(train_df, valid_df)
+        
         # prepare data for training and validation
         train_seqs = self._make_seqs(train_df)
         valid_seqs = self._make_seqs(valid_df)
@@ -112,6 +126,7 @@ class StudentModel:
         min_loss = float("inf")
         best_params = None
         waited = 0
+
         for e in range(self.epochs):
             batch_losses = []
             for features, new_seqs in self._iterate(train_seqs, shuffle=True):
@@ -125,7 +140,9 @@ class StudentModel:
                 
                 grads = t.gradient(current_loss, trainables)
                 optimizer.apply_gradients(zip(grads, trainables))
+                self._post_update()
 
+                #print("Loss: %f" % current_loss.numpy())
                 batch_losses.append(current_loss.numpy())
             
             valid_loss = self.evaluate(valid_seqs)
