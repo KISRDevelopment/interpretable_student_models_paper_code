@@ -97,7 +97,7 @@ class BktItemsModel(student_model.StudentModel):
         ix = list(set(train_df['problem']))
         training_items = np.zeros(self.n_items, dtype=bool)
         training_items[ix] = True 
-        training_items[-1] = 1
+        training_items[-1] = True
 
         self._probs_module.set_training_items(training_items)
 
@@ -161,6 +161,7 @@ class ContextualizedBktProbs(object):
     
     def set_training_items(self, training_items):
         self.kc_train_item_matrix = self.kc_item_matrix * training_items
+        #assert np.all(np.sum(self.kc_train_item_matrix, axis=1) > 0)
         self.training_items = training_items
 
     def post_update(self):
@@ -174,7 +175,7 @@ class ContextualizedBktProbs(object):
         
         # calculate per-kc mean probs
         kc_probs = np.dot(self.kc_train_item_matrix, item_probs)
-        kc_probs = kc_probs / np.sum(self.kc_train_item_matrix, axis=1,keepdims=True)
+        kc_probs = kc_probs / (1e-6 + np.sum(self.kc_train_item_matrix, axis=1,keepdims=True))
         #print(kc_probs)
         # expand back to items
         item_kc_probs = np.dot(self.kc_item_matrix.T, kc_probs)

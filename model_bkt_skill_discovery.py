@@ -80,7 +80,8 @@ class BktSkillDiscoveryModel(student_model.StudentModel):
             self._S = self._kca_module(1e-6)
             loss = super().evaluate(seqs)
             losses.append(loss)
-        
+            #print("Sample %d" % i)
+
         return np.mean(losses)
     
     def predict_seqs(self, n, seqs):

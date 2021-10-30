@@ -107,7 +107,7 @@ class DashModel:
             self._S = self._kca_module(1e-6)
             loss = self._evaluate(loader)
             losses.append(loss)
-        
+            print("Sample %d" % i)
         return np.mean(losses)
     
     def _evaluate(self, valid_loader):
@@ -119,7 +119,6 @@ class DashModel:
             features = valid_loader.next_batch()
             if features == None:
                 break
-        
             ypred = self._run_model(features.F, features.curr_skill, testing=True)
             current_loss = self.lossf(features.curr_correct, ypred)
             valid_batch_losses.append(current_loss.numpy())

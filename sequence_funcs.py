@@ -194,4 +194,45 @@ if __name__ == "__main__":
     # for features, new_seqs in create_loader(featurized_seqs, 2, 4, create_kt_transformer(3)):
     #     print(features)
     #     print(new_seqs)
-    pass
+    n_batch_trials = 50
+    n_batch_seqs = 100
+    reps = 10
+
+    import sys 
+
+    path = sys.argv[1]
+
+    df = pd.read_csv(path)
+    df['item'] = df['problem']
+
+    max_kc_id = np.max(df['skill'])
+    max_item_id = np.max(df['item'])
+
+    ph_kc_id = max_kc_id + 1
+    ph_item_id = max_item_id + 1
+
+    n_kcs = ph_kc_id + 1
+    n_items = ph_item_id + 1
+
+    import time
+    start_time = time.time()
+    
+    seqs = make_sequences(df, 'student')
+    #print("Sequenced.")
+    seqs = pad_seqs(seqs, n_batch_trials)
+    #print("Padded.")
+
+    for r in range(reps):
+        
+        featurized_seqs = featurize_seqs(seqs, {
+            "correct" : 0,
+            "skill" : ph_kc_id
+        })
+        #print("Featurized.")
+        for features, new_seqs in create_loader(featurized_seqs, n_batch_seqs, n_batch_trials, create_kt_transformer(n_kcs)):
+            pass 
+
+        #print("Done")
+        print("Rep %d" % r)
+    end_time = time.time() 
+    print("Average exec time (secs): %0.2f" % ((end_time - start_time) / reps))

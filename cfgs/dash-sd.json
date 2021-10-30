@@ -1,10 +1,10 @@
 {
     "model" : "dash-sd",
     "n_batch_trials" : 1000,
-    "n_batch_trials_testing" : 10000,
+    "n_batch_trials_testing" : 1000,
     "epochs" : 100,
     "lr" : 0.1,
-    "n_windows" : 5,
+    "n_windows" : 1,
     "patience" : 5,
     "n_groups" : 10,
     "n_samples" : 20,

@@ -34,6 +34,13 @@ def train_test(cfg, df, split, train_id, valid_id, test_id, model_params_path=No
     valid_df = df[valid_ix]
     test_df = df[test_ix]
 
+
+    test_only_skills = set(np.unique(test_df['skill'])) - set(np.unique(train_df['skill'])) 
+    
+    remove_ix = test_df['skill'].isin(test_only_skills)
+    print("Removing %d trials from test due to lack of skill in training" % np.sum(remove_ix))
+    test_df = test_df[~remove_ix]
+
     print("Training: %d, Validation: %d, Test: %d" % (train_df.shape[0], valid_df.shape[0], test_df.shape[0]))
 
     # train model        
@@ -105,7 +112,31 @@ if __name__ == "__main__":
         cfg = json.load(f)
     
     df = pd.read_csv(df_path)
-    df['skill'] = df['problem']
+    cnts = df['problem'].value_counts()
+    print(cnts)
+    print("# items: %d" % len(set(df['problem'])))
+    #q = np.percentile(cnts, 50)
+    q = 50
+    print(q)
+    print("Items with more than %d trials: %d" % (q, np.sum(cnts >= q)))
+    print("Items with less than %d trials: %d" % (q, np.sum(cnts < q)))
+
+    ineligible_items = set(cnts[cnts < q].index) 
+
+    ineligible_ix = df['problem'].isin(ineligible_items)   
+    print("ineligible: %d" % len(ineligible_items))
+    kcs = np.array(df['skill'])
+    items = np.array(df['problem'])
+    items[ineligible_ix] = -kcs[ineligible_ix]
+    df['problem'] = items 
+
+    unique_items = set(items)
+    print("Unique items: %d" % len(unique_items))
+    
+    remapped = dict(zip(unique_items, range(len(unique_items))))
+    df['problem'] = [remapped[p] for p in df['problem']]
+
+    print("New number of items: %d" % len(set(df['problem'])))
     splits = np.load(split_path)
 
     split = splits[split_id, :]
