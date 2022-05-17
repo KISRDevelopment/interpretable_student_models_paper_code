@@ -30,7 +30,6 @@ def iterate_batched(seqs, n_batch_seqs, n_batch_trials):
         Iterates in batches of size (n_batch_seqs, n_batch_trials)
     """
     n_seqs = len(seqs) 
-
     for from_seq_id in range(0, n_seqs, n_batch_seqs):
         to_seq_id = from_seq_id + n_batch_seqs
 
@@ -44,8 +43,8 @@ def iterate_batched(seqs, n_batch_seqs, n_batch_trials):
         batch_seqs = sorted(batch_seqs, key=lambda s: len(s))
 
         # identify maximum sequence length
-        max_batch_seq_len = np.max([len(s) for s in batch_seqs])
-
+        max_batch_seq_len = len(batch_seqs[-1])
+        
         # iterate over batches of trials now
         for from_trial_id in range(0, max_batch_seq_len, n_batch_trials):
             to_trial_id = from_trial_id + n_batch_trials
