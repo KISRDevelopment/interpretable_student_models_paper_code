@@ -9,20 +9,24 @@ import sequences
 import pandas as pd 
 import sklearn.metrics
 class BKTCell(jit.ScriptModule):
-    def __init__(self, n_kcs, device='cpu'):
+    def __init__(self, n_kcs, n_obs_kcs, device='cpu'):
         super(BKTCell, self).__init__()
 
         self.n_kcs = n_kcs
+        self.n_obs_kcs = n_obs_kcs
+
         self.device = device
+
         self.kc_logits = nn.Embedding(n_kcs, 5, device=device) # learning, forgetting, guessing, and slipping, initial logits
         
     @jit.script_method
-    def forward(self, input: Tuple[Tensor, Tensor, Tensor], state: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, input: Tuple[Tensor, Tensor, Tensor], state: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
         """
-            state: p(h_(t-1) = 1| y_1, ..., y_(t-2)) [n_batch, n_kcs]
+            state: p(h_(t-1) = 1| y_1, ..., y_(t-2)) [n_batch, n_obs_kcs]
+            A: assignment matrix [n_obs_kcs, n_kcs]
             input: 
-                previous KC [n_batch]
-                current KC [n_batch]
+                previous KC [n_batch] (n_obs_kcs)
+                current KC [n_batch] (n_obs_kcs)
                 previous correct [n_batch]
         """
         
@@ -30,10 +34,13 @@ class BKTCell(jit.ScriptModule):
         
         batch_ix = th.arange(prev_kc.shape[0])
         
-        prev_logits = self.kc_logits(prev_kc) # [n_batch, 5]
+        prev_A = A[prev_kc,:] # [n_batch, n_kcs]
+        prev_logits = th.matmul(prev_A, self.kc_logits.weight)# [n_batch, 5]
         prev_probs = th.sigmoid(prev_logits) # [n_batch, 5]
-        curr_logits = self.kc_logits(curr_kc) #[n_batch, 5]
-        curr_probs = th.sigmoid(curr_logits)
+
+        curr_A = A[curr_kc, :] # [n_batch, n_kcs]
+        curr_logits = th.matmul(curr_A, self.kc_logits.weight) # [n_batch, 5]
+        curr_probs = th.sigmoid(curr_logits)# [n_batch, 5]
         
         # compute probability of correctness given h (0 or 1)
         p_correct_given_h = prev_probs[:, [2, 3]] # [n_batch, 2]
@@ -49,10 +56,11 @@ class BKTCell(jit.ScriptModule):
         # compute predictive distribution p(h_t=1|y_1...y_(t-1))
         p_learning = prev_probs[:,0]
         p_forgetting = prev_probs[:,1]
-        predictive = p_learning * (1-filtering) + (1-p_forgetting) * filtering
+        predictive = p_learning * (1-filtering) + (1-p_forgetting) * filtering # [n_batch]
         
-        # update relevant entry
-        state[batch_ix,prev_kc] = predictive
+        # update relevant entries
+        states_to_update = th.matmul(prev_A, A.T) # [n_batch, n_obs_kcs]
+        state = state * (1-states_to_update) + states_to_update * predictive[:,None]
         
         # grab  predictive state at current time step
         curr_state = state[batch_ix, curr_kc] #[n_batch]
@@ -63,26 +71,28 @@ class BKTCell(jit.ScriptModule):
         return p_curr_correct, state
     
     @jit.script_method
-    def forward_first_trial(self, curr_kc: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward_first_trial(self, curr_kc: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
         """
             curr_kc: [n_batch]
+            A: [n_obs_kcs, n_kcs]
         """
-        logits = self.kc_logits(th.arange(self.n_kcs, device=self.device))
-        
+        logits = th.matmul(A, self.kc_logits.weight) # [n_obs_kcs, 5]
+
         state = th.tile(th.sigmoid(logits[:,[4]].T), (curr_kc.shape[0], 1)) # [n_batch, n_kcs]
         
-        return self.forward_first_trial_from_state(curr_kc, state)
+        return self.forward_first_trial_from_state(curr_kc, state, A)
     
     @jit.script_method
-    def forward_first_trial_from_state(self, curr_kc: Tensor, state: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward_first_trial_from_state(self, curr_kc: Tensor, state: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
         """
-            curr_kc: [n_batch]
+            curr_kc: [n_batch] (n_obs_kcs)
+            state: [n_batch, n_obs_kcs]
         """
         batch_ix = th.arange(curr_kc.shape[0], device=self.device)
         
-        logits = self.kc_logits(th.arange(self.n_kcs, device=self.device))
-        
-        curr_logits = self.kc_logits(curr_kc) #[n_batch, 5]
+        logits = th.matmul(A, self.kc_logits.weight) # [n_obs_kcs, 5]
+
+        curr_logits = logits[curr_kc,:] # [n_batch, 5]
         curr_probs = th.sigmoid(curr_logits)
         
         curr_state = state[batch_ix, curr_kc] #[n_batch]
@@ -97,6 +107,8 @@ class BKTLayer(jit.ScriptModule):
         super(BKTLayer, self).__init__()
         self.cell = cell(*cell_args)
         
+        self.kc_membership_logits = nn.Embedding(self.cell.n_obs_kcs, self.cell.n_kcs, device=self.cell.device)
+
     @jit.script_method
     def forward(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -106,11 +118,14 @@ class BKTLayer(jit.ScriptModule):
         """
         outputs = th.jit.annotate(List[Tensor], [])
         
-        pc, state = self.cell.forward_first_trial(curr_kc[:,0])
+        # sample assignment matrix
+        A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True)
+
+        pc, state = self.cell.forward_first_trial(curr_kc[:,0], A)
         outputs += [pc]
         
         for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state)
+            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
             
             outputs += [pc]
         return th.stack(outputs).T, state
@@ -125,20 +140,23 @@ class BKTLayer(jit.ScriptModule):
         """
         outputs = th.jit.annotate(List[Tensor], [])
         
-        pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state)
+        # sample assignment matrix
+        A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True)
+
+        pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, A)
         outputs += [pc]
         
         for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state)
+            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
             
             outputs += [pc]
         return th.stack(outputs).T, state
 
 class BKTModel(nn.Module):
-    def __init__(self, n_kcs, device='cpu'):
+    def __init__(self, n_kcs, n_obs_kcs, device='cpu'):
         super(BKTModel, self).__init__()
         
-        self.bktlayer = BKTLayer(BKTCell, n_kcs, device)
+        self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs, device)
 
     def forward(self, prev_kc, curr_kc, prev_corr):
         probs, state = self.bktlayer(prev_kc, curr_kc, prev_corr)
@@ -150,7 +168,8 @@ class BKTModel(nn.Module):
         
         return probs, state
 
-def train(train_seqs, valid_seqs, n_kcs, 
+def train(train_seqs, valid_seqs, n_obs_kcs, 
+    n_kcs=5,
     epochs=100, 
     n_batch_seqs=50, 
     n_batch_trials=100, 
@@ -160,7 +179,7 @@ def train(train_seqs, valid_seqs, n_kcs,
     
     loss_fn = nn.BCELoss(reduction='none')
 
-    model = BKTModel(n_kcs, device)
+    model = BKTModel(n_kcs, n_obs_kcs, device)
 
     optimizer = th.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -288,8 +307,8 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/assistment2009c.csv")
-    splits = np.load("data/splits/assistment2009c.npy")
+    df = pd.read_csv("data/datasets/synthetic.csv")
+    splits = np.load("data/splits/synthetic.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -306,9 +325,9 @@ def main():
     train_seqs = sequences.make_sequences(df, train_students)
     valid_seqs = sequences.make_sequences(df, valid_students)
 
-    n_kcs = int(np.max(df['skill']) + 1)
+    n_obs_kcs = int(np.max(df['skill']) + 1)
 
-    train(train_seqs, valid_seqs, n_kcs, device='cpu', learning_rate=0.01, epochs=10)
+    train(train_seqs, valid_seqs, n_obs_kcs, device='cpu', learning_rate=0.01, epochs=10)
 
 if __name__ == "__main__":
     main()
