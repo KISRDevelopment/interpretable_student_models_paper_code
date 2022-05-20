@@ -108,7 +108,13 @@ class BKTLayer(jit.ScriptModule):
         self.cell = cell(*cell_args)
         
         self.kc_membership_logits = nn.Embedding(self.cell.n_obs_kcs, self.cell.n_kcs, device=self.cell.device)
+        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=1)
 
+        
+    @jit.script_method
+    def sample_A(self, tau: float):
+        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau)
+        
     @jit.script_method
     def forward(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -118,14 +124,11 @@ class BKTLayer(jit.ScriptModule):
         """
         outputs = th.jit.annotate(List[Tensor], [])
         
-        # sample assignment matrix
-        A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True)
-
-        pc, state = self.cell.forward_first_trial(curr_kc[:,0], A)
+        pc, state = self.cell.forward_first_trial(curr_kc[:,0], self._A)
         outputs += [pc]
         
         for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
+            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, self._A)
             
             outputs += [pc]
         return th.stack(outputs).T, state
@@ -140,25 +143,27 @@ class BKTLayer(jit.ScriptModule):
         """
         outputs = th.jit.annotate(List[Tensor], [])
         
-        # sample assignment matrix
-        A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True)
-
-        pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, A)
+        pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, self._A)
         outputs += [pc]
         
         for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
+            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, self._A)
             
             outputs += [pc]
         return th.stack(outputs).T, state
+
 
 class BKTModel(nn.Module):
     def __init__(self, n_kcs, n_obs_kcs, device='cpu'):
         super(BKTModel, self).__init__()
         
         self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs, device)
+        
+    def sample_assignment(self, tau):
+        self.bktlayer.sample_A(tau)
 
     def forward(self, prev_kc, curr_kc, prev_corr):
+
         probs, state = self.bktlayer(prev_kc, curr_kc, prev_corr)
         
         return probs, state
@@ -174,7 +179,8 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
     n_batch_seqs=50, 
     n_batch_trials=100, 
     learning_rate=1e-1,
-    patience=50,
+    patience=10,
+    tau=1.5,
     device='cpu'):
     
     loss_fn = nn.BCELoss(reduction='none')
@@ -183,9 +189,12 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
 
     optimizer = th.optim.Adam(model.parameters(), lr=learning_rate)
 
+    best_val_auc = 0.5 
+    best_state = None 
+    epochs_since_last_best = 0
+
     for e in range(epochs):
         np.random.shuffle(train_seqs)
-        print("Epoch %d" % e, end=' ')
         losses = []
 
         for seqs, new_seqs in sequences.iterate_batched(train_seqs, n_batch_seqs, n_batch_trials):
@@ -193,12 +202,12 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
             curr_skill, curr_correct, mask, _ = transform(seqs)
             prev_skill, prev_correct, _, _ = transform(seqs, prev_trial=True)
             
-
             if new_seqs:
                 prev_skill = prev_skill.to(device)
                 curr_skill = curr_skill.to(device)
                 prev_correct = prev_correct.to(device)
 
+                model.sample_assignment(tau)
                 probs, state = model(prev_skill, curr_skill, prev_correct)
             else:
                 state = state.detach()
@@ -214,6 +223,7 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
                 prev_correct = prev_correct.to(device)
                 state = state.to(device)
 
+                model.sample_assignment(tau)
                 probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
             
             curr_correct = curr_correct.to(device)
@@ -228,57 +238,74 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
             loss.backward()
             optimizer.step()
         
-        print("Loss: %f"  % np.mean(losses))
+        ytrue_valid, ypred_valid = predict(model, valid_seqs, device=device)
+        auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
+        print("%d Train loss: %0.4f, Valid auc: %0.2f" % (e, np.mean(losses), auc_roc))
 
-        predict(model, valid_seqs, device=device)
+        epochs_since_last_best += 1
 
-def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu'):
+        if auc_roc > best_val_auc:
+            best_val_auc = auc_roc
+            best_state = model.state_dict()
+            epochs_since_last_best = 0
+        
+        if epochs_since_last_best >= patience:
+            break
+
+    model.load_state_dict(best_state)
+    return model 
+
+def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu', n_samples=5):
 
     with th.no_grad():
-        all_probs = []
-        all_labels = []
-        for seqs, new_seqs in sequences.iterate_batched(test_seqs, n_batch_seqs, n_batch_trials):
-            curr_skill, curr_correct, mask, trial_index = transform(seqs)
-            prev_skill, prev_correct, _, _ = transform(seqs, prev_trial=True)
+        final_probs = []
+
+        for e in range(n_samples):
+            all_probs = []
+            all_labels = []
+
+            model.sample_assignment(tau=1e-6)
+            for seqs, new_seqs in sequences.iterate_batched(test_seqs, n_batch_seqs, n_batch_trials):
+                curr_skill, curr_correct, mask, trial_index = transform(seqs)
+                prev_skill, prev_correct, _, _ = transform(seqs, prev_trial=True)
+                
+                if new_seqs:
+                    prev_skill = prev_skill.to(device)
+                    curr_skill = curr_skill.to(device)
+                    prev_correct = prev_correct.to(device)
+
+                    probs, state = model(prev_skill, curr_skill, prev_correct)
+                else:
+                    # trim the state
+                    n_state_size = state.shape[0]
+                    n_diff = n_state_size - len(seqs)
+                    if n_diff > 0:
+                        state = state[n_diff:,:]
+
+                    prev_skill = prev_skill.to(device)
+                    curr_skill = curr_skill.to(device)
+                    prev_correct = prev_correct.to(device)
+                    state = state.to(device)
+
+                    probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
+                
+                probs = probs.cpu()
+                
+                probs = probs.flatten()
+                curr_correct = curr_correct.flatten()
+                mask = mask.flatten().bool()
+
+                probs = probs[mask]
+                curr_correct = curr_correct[mask]
+                all_probs.append(probs)
+                all_labels.append(curr_correct)
             
-            if new_seqs:
-                prev_skill = prev_skill.to(device)
-                curr_skill = curr_skill.to(device)
-                prev_correct = prev_correct.to(device)
+            all_probs = th.concat(all_probs).numpy()
+            all_labels = th.concat(all_labels).numpy()
 
-                probs, state = model(prev_skill, curr_skill, prev_correct)
-            else:
-                # trim the state
-                n_state_size = state.shape[0]
-                n_diff = n_state_size - len(seqs)
-                if n_diff > 0:
-                    state = state[n_diff:,:]
+        final_probs.append(all_probs[:,None])
 
-                prev_skill = prev_skill.to(device)
-                curr_skill = curr_skill.to(device)
-                prev_correct = prev_correct.to(device)
-                state = state.to(device)
-
-                probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
-            
-            probs = probs.cpu()
-            
-            probs = probs.flatten()
-            curr_correct = curr_correct.flatten()
-            mask = mask.flatten().bool()
-
-            probs = probs[mask]
-            curr_correct = curr_correct[mask]
-            all_probs.append(probs)
-            all_labels.append(curr_correct)
-        
-        all_probs = th.concat(all_probs).numpy()
-        all_labels = th.concat(all_labels).numpy()
-        
-        auc_roc = sklearn.metrics.roc_auc_score(all_labels, all_probs)
-        print("Valid auc: %0.2f" % auc_roc)
-
-
+    return all_labels, np.mean(np.hstack(final_probs), axis=1)
 
 def transform(subseqs, prev_trial=False):
     n_batch = len(subseqs)
@@ -327,7 +354,14 @@ def main():
 
     n_obs_kcs = int(np.max(df['skill']) + 1)
 
-    train(train_seqs, valid_seqs, n_obs_kcs, device='cpu', learning_rate=0.01, epochs=10)
+    model = train(train_seqs, valid_seqs, n_obs_kcs, device='cpu', learning_rate=0.01, epochs=100)
+
+    test_students = set(test_df['student'])
+    test_seqs = sequences.make_sequences(df, test_students)
+    ytrue_test, ypred_test = predict(model, test_seqs, device='cpu')
+    auc_roc = sklearn.metrics.roc_auc_score(ytrue_test, ypred_test)
+    print("Test auc: %0.2f" % (auc_roc))
+
 
 if __name__ == "__main__":
     main()
