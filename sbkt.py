@@ -8,6 +8,7 @@ import numpy as np
 import sequences
 import pandas as pd 
 import sklearn.metrics
+
 class BKTCell(jit.ScriptModule):
     def __init__(self, n_kcs, n_obs_kcs, device='cpu'):
         super(BKTCell, self).__init__()
@@ -113,7 +114,7 @@ class BKTLayer(jit.ScriptModule):
 
     @jit.script_method
     def sample_A(self, tau: float):
-        return nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau)
+        return nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
         
     @jit.script_method
     def forward(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
@@ -191,7 +192,7 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
     model = BKTModel(n_kcs, n_obs_kcs, device)
 
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
-
+    #scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', threshold=1e-2, threshold_mode='abs', verbose=True)
     best_val_auc = 0.5 
     best_val_loss = np.inf 
     best_state = None 
@@ -257,6 +258,8 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
             best_state = model.state_dict()
             epochs_since_last_best = 0
         
+        #scheduler.step(valid_loss)
+
         if epochs_since_last_best >= patience:
             break
 
@@ -367,6 +370,7 @@ def main():
         learning_rate=0.1, 
         epochs=100, 
         tau=0.5, 
+        patience=10,
         n_batch_seqs=100, 
         n_batch_trials=50)
 
