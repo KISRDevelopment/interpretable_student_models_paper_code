@@ -18,7 +18,8 @@ class BKTCell(jit.ScriptModule):
         self.device = device
 
         self.kc_logits = nn.Embedding(n_kcs, 5, device=device) # learning, forgetting, guessing, and slipping, initial logits
-        
+        nn.init.normal_(self.kc_logits.weight, 0, 0.1)
+
     @jit.script_method
     def forward(self, input: Tuple[Tensor, Tensor, Tensor], state: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -108,15 +109,14 @@ class BKTLayer(jit.ScriptModule):
         self.cell = cell(*cell_args)
         
         self.kc_membership_logits = nn.Embedding(self.cell.n_obs_kcs, self.cell.n_kcs, device=self.cell.device)
-        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=1)
+        nn.init.normal_(self.kc_membership_logits.weight, 0, 0.1)
 
-        
     @jit.script_method
     def sample_A(self, tau: float):
-        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau)
+        return nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau)
         
     @jit.script_method
-    def forward(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
         """
             prev_kc: [n_batch, t]
             curr_kc: [n_batch, t]
@@ -124,17 +124,17 @@ class BKTLayer(jit.ScriptModule):
         """
         outputs = th.jit.annotate(List[Tensor], [])
         
-        pc, state = self.cell.forward_first_trial(curr_kc[:,0], self._A)
+        pc, state = self.cell.forward_first_trial(curr_kc[:,0], A)
         outputs += [pc]
         
         for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, self._A)
+            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
             
             outputs += [pc]
         return th.stack(outputs).T, state
 
     @jit.script_method
-    def forward_from_state(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, state: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward_from_state(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, state: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
         """
             prev_kc: [n_batch, t]
             curr_kc: [n_batch, t]
@@ -143,11 +143,11 @@ class BKTLayer(jit.ScriptModule):
         """
         outputs = th.jit.annotate(List[Tensor], [])
         
-        pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, self._A)
+        pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, A)
         outputs += [pc]
         
         for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, self._A)
+            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
             
             outputs += [pc]
         return th.stack(outputs).T, state
@@ -158,18 +158,19 @@ class BKTModel(nn.Module):
         super(BKTModel, self).__init__()
         
         self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs, device)
-        
+        self._A = None 
+
     def sample_assignment(self, tau):
-        self.bktlayer.sample_A(tau)
+        self._A = self.bktlayer.sample_A(tau)
 
     def forward(self, prev_kc, curr_kc, prev_corr):
 
-        probs, state = self.bktlayer(prev_kc, curr_kc, prev_corr)
+        probs, state = self.bktlayer(prev_kc, curr_kc, prev_corr, self._A)
         
         return probs, state
 
     def forward_from_state(self, prev_kc, curr_kc, prev_corr, state):
-        probs, state = self.bktlayer.forward_from_state(prev_kc, curr_kc, prev_corr, state)
+        probs, state = self.bktlayer.forward_from_state(prev_kc, curr_kc, prev_corr, state, self._A)
         
         return probs, state
 
@@ -181,15 +182,18 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
     learning_rate=1e-1,
     patience=10,
     tau=1.5,
+    n_valid_samples=20,
     device='cpu'):
+    print("Obs KCS : %d -> Core KCS: %d" % (n_obs_kcs, n_kcs))
     
     loss_fn = nn.BCELoss(reduction='none')
 
     model = BKTModel(n_kcs, n_obs_kcs, device)
 
-    optimizer = th.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
 
     best_val_auc = 0.5 
+    best_val_loss = np.inf 
     best_state = None 
     epochs_since_last_best = 0
 
@@ -237,14 +241,18 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            
+        ytrue_valid, ypred_valid = predict(model, valid_seqs, device=device, n_samples=n_valid_samples)
+        valid_loss = loss_fn(th.tensor(ypred_valid), th.tensor(ytrue_valid)).mean().numpy()
         
-        ytrue_valid, ypred_valid = predict(model, valid_seqs, device=device)
         auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
-        print("%d Train loss: %0.4f, Valid auc: %0.2f" % (e, np.mean(losses), auc_roc))
+        print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.2f" % (e, np.mean(losses), valid_loss, auc_roc))
 
         epochs_since_last_best += 1
 
-        if auc_roc > best_val_auc:
+        #if auc_roc > best_val_auc:
+        if valid_loss < best_val_loss:
+            best_val_loss = valid_loss
             best_val_auc = auc_roc
             best_state = model.state_dict()
             epochs_since_last_best = 0
@@ -353,14 +361,22 @@ def main():
     valid_seqs = sequences.make_sequences(df, valid_students)
 
     n_obs_kcs = int(np.max(df['skill']) + 1)
-
-    model = train(train_seqs, valid_seqs, n_obs_kcs, device='cpu', learning_rate=0.01, epochs=100)
+    model = train(train_seqs, valid_seqs, n_obs_kcs, 
+        n_kcs=10, 
+        device='cpu', 
+        learning_rate=0.1, 
+        epochs=100, 
+        tau=0.5, 
+        n_batch_seqs=100, 
+        n_batch_trials=50)
 
     test_students = set(test_df['student'])
     test_seqs = sequences.make_sequences(df, test_students)
-    ytrue_test, ypred_test = predict(model, test_seqs, device='cpu')
+    ytrue_test, ypred_test = predict(model, test_seqs, device='cpu',n_samples=20)
     auc_roc = sklearn.metrics.roc_auc_score(ytrue_test, ypred_test)
-    print("Test auc: %0.2f" % (auc_roc))
+    test_loss = -np.mean(ytrue_test * np.log(ypred_test) + (1-ytrue_test) * np.log(1-ypred_test))
+
+    print("Test loss: %0.4f, auc: %0.2f" % (test_loss, auc_roc))
 
 
 if __name__ == "__main__":
