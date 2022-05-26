@@ -8,17 +8,16 @@ import numpy as np
 import sequences
 import pandas as pd 
 import sklearn.metrics
+import copy 
 
 class BKTCell(jit.ScriptModule):
-    def __init__(self, n_kcs, n_obs_kcs, device='cpu'):
+    def __init__(self, n_kcs, n_obs_kcs):
         super(BKTCell, self).__init__()
 
         self.n_kcs = n_kcs
         self.n_obs_kcs = n_obs_kcs
 
-        self.device = device
-
-        self.kc_logits = nn.Embedding(n_kcs, 5, device=device) # learning, forgetting, guessing, and slipping, initial logits
+        self.kc_logits = nn.Embedding(n_kcs, 5) # learning, forgetting, guessing, and slipping, initial logits
         nn.init.normal_(self.kc_logits.weight, 0, 0.1)
 
     @jit.script_method
@@ -75,7 +74,7 @@ class BKTCell(jit.ScriptModule):
     @jit.script_method
     def forward_first_trial(self, curr_kc: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
         """
-            curr_kc: [n_batch]
+            curr_kc: [n_b+atch]
             A: [n_obs_kcs, n_kcs]
         """
         logits = th.matmul(A, self.kc_logits.weight) # [n_obs_kcs, 5]
@@ -90,7 +89,7 @@ class BKTCell(jit.ScriptModule):
             curr_kc: [n_batch] (n_obs_kcs)
             state: [n_batch, n_obs_kcs]
         """
-        batch_ix = th.arange(curr_kc.shape[0], device=self.device)
+        batch_ix = th.arange(curr_kc.shape[0])
         
         logits = th.matmul(A, self.kc_logits.weight) # [n_obs_kcs, 5]
 
@@ -109,11 +108,20 @@ class BKTLayer(jit.ScriptModule):
         super(BKTLayer, self).__init__()
         self.cell = cell(*cell_args)
         
-        self.kc_membership_logits = nn.Embedding(self.cell.n_obs_kcs, self.cell.n_kcs, device=self.cell.device)
-        nn.init.normal_(self.kc_membership_logits.weight, 0, 0.1)
+        self.kc_membership_logits = nn.Embedding(self.cell.n_obs_kcs, self.cell.n_kcs)
+        nn.init.xavier_normal_(self.kc_membership_logits.weight)
+
+        if self.cell.n_kcs == self.cell.n_obs_kcs:
+            self._A = th.eye(self.cell.n_kcs)
+        else:
+            self._A = None 
 
     @jit.script_method
     def sample_A(self, tau: float):
+        # for when n_kcs = n_obs_kcs
+        if self._A is not None:
+            return self._A 
+        
         return nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
         
     @jit.script_method
@@ -155,10 +163,10 @@ class BKTLayer(jit.ScriptModule):
 
 
 class BKTModel(nn.Module):
-    def __init__(self, n_kcs, n_obs_kcs, device='cpu'):
+    def __init__(self, n_kcs, n_obs_kcs):
         super(BKTModel, self).__init__()
         
-        self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs, device)
+        self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs)
         self._A = None 
 
     def sample_assignment(self, tau):
@@ -189,8 +197,9 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
     
     loss_fn = nn.BCELoss(reduction='none')
 
-    model = BKTModel(n_kcs, n_obs_kcs, device)
-
+    model = BKTModel(n_kcs, n_obs_kcs)
+    model.to(device)
+    
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     #scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', threshold=1e-2, threshold_mode='abs', verbose=True)
     best_val_auc = 0.5 
@@ -215,6 +224,7 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
                 model.sample_assignment(tau)
                 probs, state = model(prev_skill, curr_skill, prev_correct)
             else:
+                
                 state = state.detach()
 
                 # trim the state
@@ -231,6 +241,7 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
                 model.sample_assignment(tau)
                 probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
             
+            #probs = th.clip(probs, 0.01, 0.99)
             curr_correct = curr_correct.to(device)
             mask = mask.to(device)
             loss = loss_fn(probs, curr_correct)
@@ -243,7 +254,7 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
             loss.backward()
             optimizer.step()
             
-        ytrue_valid, ypred_valid = predict(model, valid_seqs, device=device, n_samples=n_valid_samples)
+        ytrue_valid, ypred_valid = predict(model, valid_seqs, device=device, n_samples=n_valid_samples, n_batch_seqs=n_batch_seqs*2, n_batch_trials=n_batch_trials)
         valid_loss = loss_fn(th.tensor(ypred_valid), th.tensor(ytrue_valid)).mean().numpy()
         
         auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
@@ -255,7 +266,7 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
         if valid_loss < best_val_loss:
             best_val_loss = valid_loss
             best_val_auc = auc_roc
-            best_state = model.state_dict()
+            best_state = copy.deepcopy(model.state_dict())
             epochs_since_last_best = 0
         
         #scheduler.step(valid_loss)
@@ -345,8 +356,8 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/synthetic.csv")
-    splits = np.load("data/splits/synthetic.npy")
+    df = pd.read_csv("data/datasets/assistment.csv")
+    splits = np.load("data/splits/assistment.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -365,9 +376,9 @@ def main():
 
     n_obs_kcs = int(np.max(df['skill']) + 1)
     model = train(train_seqs, valid_seqs, n_obs_kcs, 
-        n_kcs=10, 
+        n_kcs=n_obs_kcs, 
         device='cpu', 
-        learning_rate=0.1, 
+        learning_rate=0.01, 
         epochs=100, 
         tau=0.5, 
         patience=10,
