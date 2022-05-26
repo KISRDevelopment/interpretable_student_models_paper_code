@@ -202,7 +202,6 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     #scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', threshold=1e-2, threshold_mode='abs', verbose=True)
-    best_val_auc = 0.5 
     best_val_loss = np.inf 
     best_state = None 
     epochs_since_last_best = 0
@@ -254,18 +253,13 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
             loss.backward()
             optimizer.step()
             
-        ytrue_valid, ypred_valid = predict(model, valid_seqs, device=device, n_samples=n_valid_samples, n_batch_seqs=n_batch_seqs*2, n_batch_trials=n_batch_trials)
-        valid_loss = loss_fn(th.tensor(ypred_valid), th.tensor(ytrue_valid)).mean().numpy()
-        
-        auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
-        print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.2f" % (e, np.mean(losses), valid_loss, auc_roc))
+        valid_loss = evaluate(model, valid_seqs, device=device, n_samples=n_valid_samples, n_batch_seqs=n_batch_seqs*2, n_batch_trials=n_batch_trials)
+        print("%d Train loss: %0.4f, Valid loss: %0.4f" % (e, np.mean(losses), valid_loss))
 
         epochs_since_last_best += 1
 
-        #if auc_roc > best_val_auc:
         if valid_loss < best_val_loss:
             best_val_loss = valid_loss
-            best_val_auc = auc_roc
             best_state = copy.deepcopy(model.state_dict())
             epochs_since_last_best = 0
         
@@ -283,51 +277,73 @@ def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu',
         final_probs = []
 
         for e in range(n_samples):
-            all_probs = []
-            all_labels = []
-
-            model.sample_assignment(tau=1e-6)
-            for seqs, new_seqs in sequences.iterate_batched(test_seqs, n_batch_seqs, n_batch_trials):
-                curr_skill, curr_correct, mask, trial_index = transform(seqs)
-                prev_skill, prev_correct, _, _ = transform(seqs, prev_trial=True)
-                
-                if new_seqs:
-                    prev_skill = prev_skill.to(device)
-                    curr_skill = curr_skill.to(device)
-                    prev_correct = prev_correct.to(device)
-
-                    probs, state = model(prev_skill, curr_skill, prev_correct)
-                else:
-                    # trim the state
-                    n_state_size = state.shape[0]
-                    n_diff = n_state_size - len(seqs)
-                    if n_diff > 0:
-                        state = state[n_diff:,:]
-
-                    prev_skill = prev_skill.to(device)
-                    curr_skill = curr_skill.to(device)
-                    prev_correct = prev_correct.to(device)
-                    state = state.to(device)
-
-                    probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
-                
-                probs = probs.cpu()
-                
-                probs = probs.flatten()
-                curr_correct = curr_correct.flatten()
-                mask = mask.flatten().bool()
-
-                probs = probs[mask]
-                curr_correct = curr_correct[mask]
-                all_probs.append(probs)
-                all_labels.append(curr_correct)
             
-            all_probs = th.concat(all_probs).numpy()
-            all_labels = th.concat(all_labels).numpy()
+            model.sample_assignment(tau=1e-6)
+            probs, curr_correct = _predict(model, test_seqs, n_batch_seqs, n_batch_trials, device)
+            
+            final_probs.append(probs[:,None])
 
-        final_probs.append(all_probs[:,None])
+    return curr_correct, np.mean(np.hstack(final_probs), axis=1)
 
-    return all_labels, np.mean(np.hstack(final_probs), axis=1)
+def evaluate(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu', n_samples=5):
+    with th.no_grad():
+        losses = []
+
+        for e in range(n_samples):
+            
+            model.sample_assignment(tau=1e-6)
+            probs, curr_correct = _predict(model, test_seqs, n_batch_seqs, n_batch_trials, device)
+            loss = -np.mean(curr_correct * np.log(probs) + (1-curr_correct) * np.log(1-probs))
+
+            losses.append(loss)
+
+    return np.mean(losses)
+
+def _predict(model, seqs, n_batch_seqs, n_batch_trials, device):
+    all_probs = []
+    all_labels = []
+
+    for seqs, new_seqs in sequences.iterate_batched(seqs, n_batch_seqs, n_batch_trials):
+        curr_skill, curr_correct, mask, trial_index = transform(seqs)
+        prev_skill, prev_correct, _, _ = transform(seqs, prev_trial=True)
+                
+        if new_seqs:
+            prev_skill = prev_skill.to(device)
+            curr_skill = curr_skill.to(device)
+            prev_correct = prev_correct.to(device)
+
+            probs, state = model(prev_skill, curr_skill, prev_correct)
+        else:
+            # trim the state
+            n_state_size = state.shape[0]
+            n_diff = n_state_size - len(seqs)
+            if n_diff > 0:
+                state = state[n_diff:,:]
+
+            prev_skill = prev_skill.to(device)
+            curr_skill = curr_skill.to(device)
+            prev_correct = prev_correct.to(device)
+            state = state.to(device)
+
+            probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
+        
+        probs = probs.cpu()
+        
+        probs = probs.flatten()
+        curr_correct = curr_correct.flatten()
+        mask = mask.flatten().bool()
+
+        probs = probs[mask]
+        curr_correct = curr_correct[mask]
+
+        all_probs.append(probs)
+        all_labels.append(curr_correct)
+
+
+    all_probs = th.concat(all_probs).numpy()
+    all_labels = th.concat(all_labels).numpy()
+
+    return all_probs, all_labels
 
 def transform(subseqs, prev_trial=False):
     n_batch = len(subseqs)
@@ -356,8 +372,8 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/assistment.csv")
-    splits = np.load("data/splits/assistment.npy")
+    df = pd.read_csv("data/datasets/synthetic_ours.csv")
+    splits = np.load("data/splits/synthetic_ours.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -376,13 +392,13 @@ def main():
 
     n_obs_kcs = int(np.max(df['skill']) + 1)
     model = train(train_seqs, valid_seqs, n_obs_kcs, 
-        n_kcs=n_obs_kcs, 
+        n_kcs=10, 
         device='cpu', 
-        learning_rate=0.01, 
+        learning_rate=0.1, 
         epochs=100, 
         tau=0.5, 
         patience=10,
-        n_batch_seqs=100, 
+        n_batch_seqs=200, 
         n_batch_trials=50)
 
     test_students = set(test_df['student'])
