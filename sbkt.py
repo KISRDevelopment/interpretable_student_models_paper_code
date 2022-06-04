@@ -372,8 +372,9 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/synthetic_ours.csv")
-    splits = np.load("data/splits/synthetic_ours.npy")
+    df = pd.read_csv("data/datasets/algebra2010.csv")
+    #df['skill'] = df['core_skill']
+    splits = np.load("data/splits/algebra2010.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -392,7 +393,7 @@ def main():
 
     n_obs_kcs = int(np.max(df['skill']) + 1)
     model = train(train_seqs, valid_seqs, n_obs_kcs, 
-        n_kcs=10, 
+        n_kcs=5, 
         device='cpu', 
         learning_rate=0.1, 
         epochs=100, 
