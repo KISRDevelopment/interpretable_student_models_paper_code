@@ -9,9 +9,10 @@ import sequences
 import pandas as pd 
 import sklearn.metrics
 import copy 
+import torch.distributions as D
 
 class BKTCell(jit.ScriptModule):
-    def __init__(self, n_kcs, n_obs_kcs):
+    def __init__(self, n_kcs, n_obs_kcs, n_abilities):
         super(BKTCell, self).__init__()
 
         self.n_kcs = n_kcs
@@ -20,89 +21,157 @@ class BKTCell(jit.ScriptModule):
         self.kc_logits = nn.Embedding(n_kcs, 5) # learning, forgetting, guessing, and slipping, initial logits
         nn.init.normal_(self.kc_logits.weight, 0, 0.1)
 
+        self.abilities = th.linspace(-3, 3, n_abilities)
+        
+        # student abilities prior
+        self.n_components = 5
+        self.component_weights = nn.Parameter(th.randn(self.n_components))
+        self.component_mu = nn.Parameter(th.randn(self.n_components))
+        self.component_log_var = nn.Parameter(th.randn(self.n_components))
+        
     @jit.script_method
-    def forward(self, input: Tuple[Tensor, Tensor, Tensor], state: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
-        """
-            state: p(h_(t-1) = 1| y_1, ..., y_(t-2)) [n_batch, n_obs_kcs]
-            A: assignment matrix [n_obs_kcs, n_kcs]
-            input: 
-                previous KC [n_batch] (n_obs_kcs)
-                current KC [n_batch] (n_obs_kcs)
-                previous correct [n_batch]
-        """
+    def forward(self, prev_kc: Tensor,          # previous KC [n_batch] (n_obs_kcs)
+                      curr_kc: Tensor,          # current KC [n_batch] (n_obs_kcs)
+                      prev_corr: Tensor,        # previous correct [n_batch] (n_obs_kcs)
+                      A: Tensor,                # assignment matrix [n_obs_kcs, n_kcs]
+                      full_state: Tuple[Tensor, Tensor, Tensor] 
+                            # state: predictive state distribution p(h_(t-1) = 1|y_1,...,y_(t-2),a_s) [n_batch, n_obs_kcs, n_abilities]
+                            # ability_state: unnormed log posterior over abilities log(p(y_1,...,y_(t-2),a_s)) [n_batch, n_abilities],
+                            # probability correct answer on previous trial p(y_(t-1)=1|y_1...(t-2),a_s) [n_batch, n_abilities]
+                ) -> Tuple[Tensor, Tensor, Tensor]:
         
-        prev_kc, curr_kc, prev_corr = input 
-        
+        state, ability_state, prev_prob_corr_given_alpha = full_state
+
+        #
+        # update the unnormed posterior over student abilities
+        #
+
+        # compute loglikelihood of previous trial
+        prev_trial_logprob = prev_corr[:,None] * th.log(prev_prob_corr_given_alpha) + (1-prev_corr[:,None]) * th.log(1-prev_prob_corr_given_alpha)
+
+        # perform update, ability_state is now: log(p(y_1,...,y_(t-1), a_s))
+        ability_state = prev_trial_logprob + ability_state
+
+        # normalize the posterior to get p(a_s|y_1...y_(t-1))
+        #normed_ability_posterior = th.softmax(ability_state, dim=1)
+
+        #
+        # update hmm state
+        #
         batch_ix = th.arange(prev_kc.shape[0])
         
         prev_A = A[prev_kc,:] # [n_batch, n_kcs]
         prev_logits = th.matmul(prev_A, self.kc_logits.weight)# [n_batch, 5]
-        prev_probs = th.sigmoid(prev_logits) # [n_batch, 5]
-
+        
         curr_A = A[curr_kc, :] # [n_batch, n_kcs]
         curr_logits = th.matmul(curr_A, self.kc_logits.weight) # [n_batch, 5]
-        curr_probs = th.sigmoid(curr_logits)# [n_batch, 5]
         
-        # compute probability of correctness given h (0 or 1)
-        p_correct_given_h = prev_probs[:, [2, 3]] # [n_batch, 2]
+        # compute probability of correctness given h
+        batch_abilities = th.tile(self.abilities, (prev_kc.shape[0],1)) # [n_batch, n_abilities]
+        p_correct_given_h0 = th.sigmoid(prev_logits[:, [2]] + batch_abilities) # [n_batch, n_abilities]
+        p_correct_given_h1 = th.sigmoid(prev_logits[:, [3]] + batch_abilities) # [n_batch, n_abilities]
+
+        # compute probability of previous steps' output given h [n_batch, n_abilities]
+        p_output_given_h0 = th.pow(p_correct_given_h0, prev_corr[:,None]) * th.pow(1-p_correct_given_h0, 1-prev_corr[:,None])
+        p_output_given_h1 = th.pow(p_correct_given_h1, prev_corr[:,None]) * th.pow(1-p_correct_given_h1, 1-prev_corr[:,None])
         
-        # compute probability of previous steps' output given h [n_batch, 2]
-        p_output_given_h = th.pow(p_correct_given_h, prev_corr[:,None]) * th.pow(1-p_correct_given_h, 1-prev_corr[:,None])
+        # compute filtering distribution p(h_(t-1) = 1 | y_1 .. y_(t-1),a_s)
+        skill_state = state[batch_ix, prev_kc, :] # [n_batch, n_abilities]
+
+        # [n_batch, n_abilities]
+        filtering = (p_output_given_h1 * skill_state) / \
+            (p_output_given_h0*(1-skill_state) + p_output_given_h1*skill_state)
         
-        # compute filtering distribution p(h_(t-1) = 1 | y_1 .. y_(t-1))
-        skill_state = state[batch_ix, prev_kc] # [n_batch]
-        # [n_batch]
-        filtering = (p_output_given_h[:,1] * skill_state) / (p_output_given_h[:,0]*(1-skill_state) + p_output_given_h[:,1]*skill_state)
-        
-        # compute predictive distribution p(h_t=1|y_1...y_(t-1))
-        p_learning = prev_probs[:,0]
-        p_forgetting = prev_probs[:,1]
-        predictive = p_learning * (1-filtering) + (1-p_forgetting) * filtering # [n_batch]
+        # compute predictive distribution p(h_t=1|y_1...y_(t-1), a_s)
+        p_learning = th.sigmoid(prev_logits[:,0,None])
+        p_forgetting = th.sigmoid(prev_logits[:,1,None])
+        predictive = p_learning * (1-filtering) + (1-p_forgetting) * filtering # [n_batch, n_abilities]
         
         # update relevant entries
-        states_to_update = th.matmul(prev_A, A.T) # [n_batch, n_obs_kcs]
-        state = state * (1-states_to_update) + states_to_update * predictive[:,None]
+        states_to_update = th.matmul(prev_A, A.T)[:,:,None] # [n_batch, n_obs_kcs, 1]
+
+        # [n_batch, n_obs_kcs, n_abilities]
+        state = state * (1-states_to_update) + states_to_update * predictive[:,None,:]
         
         # grab  predictive state at current time step
-        curr_state = state[batch_ix, curr_kc] #[n_batch]
+        curr_state = state[batch_ix, curr_kc, :] # [n_batch, n_abilities]
         
-        p_correct_given_curr_h = curr_probs[:, [2, 3]] # [n_batch, 2]
-        p_curr_correct = p_correct_given_curr_h[:,0] * (1-curr_state) + p_correct_given_curr_h[:,1] * curr_state
+        p_correct_given_curr_h0 = th.sigmoid(curr_logits[:, [2]] + batch_abilities)
+        p_correct_given_curr_h1 = th.sigmoid(curr_logits[:, [3]] + batch_abilities)
         
-        return p_curr_correct, state
+        # [n_batch, n_abilities]
+        p_curr_correct_given_alpha = p_correct_given_curr_h0 * (1-curr_state) + p_correct_given_curr_h1 * curr_state
+        
+        # marginalize out the abilities  [n_batch,]
+        #p_curr_correct = (p_curr_correct_given_alpha * normed_ability_posterior).sum(1)
+
+        return state, ability_state, p_curr_correct_given_alpha
     
     @jit.script_method
-    def forward_first_trial(self, curr_kc: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward_first_trial(self, curr_kc: Tensor, A: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
             curr_kc: [n_b+atch]
             A: [n_obs_kcs, n_kcs]
         """
         logits = th.matmul(A, self.kc_logits.weight) # [n_obs_kcs, 5]
 
-        state = th.tile(th.sigmoid(logits[:,[4]].T), (curr_kc.shape[0], 1)) # [n_batch, n_kcs]
+        state = th.tile(th.sigmoid(logits[:,4]), (curr_kc.shape[0], 1))[:,:,None] # [n_batch, n_kcs, 1]
+        state = th.tile(state, (self.abilities.shape[0],)) # [n_batch, n_kcs, n_abilities]
         
-        return self.forward_first_trial_from_state(curr_kc, state, A)
+        # initialize abilities prior log(a_s)
+        abilities_prior = self.gmm_logpdf(self.abilities, self.component_weights, self.component_mu, self.component_log_var)
+        ability_state = th.tile(abilities_prior, (curr_kc.shape[0],1)) # [n_batch, n_abilities]
+
+        return self.forward_first_trial_from_state(curr_kc, A, state, ability_state)
     
     @jit.script_method
-    def forward_first_trial_from_state(self, curr_kc: Tensor, state: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward_first_trial_from_state(self, curr_kc: Tensor, A: Tensor, state: Tensor, ability_state: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
             curr_kc: [n_batch] (n_obs_kcs)
             state: [n_batch, n_obs_kcs]
+            ability_state: [n_batch,n_abilities]
         """
         batch_ix = th.arange(curr_kc.shape[0])
         
         logits = th.matmul(A, self.kc_logits.weight) # [n_obs_kcs, 5]
 
         curr_logits = logits[curr_kc,:] # [n_batch, 5]
-        curr_probs = th.sigmoid(curr_logits)
         
-        curr_state = state[batch_ix, curr_kc] #[n_batch]
+        curr_state = state[batch_ix, curr_kc, :] # [n_batch, n_abilities]
         
-        p_correct_given_curr_h = curr_probs[:, [2, 3]] # [n_batch, 2]
-        p_curr_correct = p_correct_given_curr_h[:,0] * (1-curr_state) + p_correct_given_curr_h[:,1] * curr_state
+        batch_abilities = th.tile(self.abilities, (curr_kc.shape[0], 1)) # [n_batch, n_abilities]
+
+        p_correct_given_curr_h0 = th.sigmoid(curr_logits[:, [2]] + batch_abilities)  # [n_batch, n_abilities]
+        p_correct_given_curr_h1 = th.sigmoid(curr_logits[:, [3]] + batch_abilities)  # [n_batch, n_abilities]
+
+        # p(y1|a_s)
+        # [n_batch, n_abilities]
+        p_curr_correct_given_alpha = p_correct_given_curr_h0 * (1-curr_state) + p_correct_given_curr_h1 * curr_state
         
-        return p_curr_correct, state 
+        # marginalize out abilities [n_batch,]
+        #p_curr_correct = (p_curr_correct_given_alpha * abilities_state).sum(1)
+
+        return state, ability_state, p_curr_correct_given_alpha
     
+    @jit.script_method
+    def gmm_logpdf(self, x, weights_unnormed, mus, log_vars):
+        """
+            x: [n,]
+            weights_unnormed, mus, log_stds: [m,]
+        """
+        
+        x = th.tile(x, (weights_unnormed.shape[0],1)) # [m, n]
+
+        weights = th.softmax(weights_unnormed, dim=0)[:,None]
+        mus = mus[:,None]
+        dvars = th.exp(log_vars[:,None])
+        
+        # [m, n]
+        logpdf = 0.5 * th.square(x - mus) / dvars - th.log(th.sqrt(2 * th.pi * dvars))  
+        logpdf = logpdf + th.log(weights)
+
+        return th.logsumexp(logpdf, dim=0) 
+
 class BKTLayer(jit.ScriptModule):
     def __init__(self, cell, *cell_args):
         super(BKTLayer, self).__init__()
@@ -123,50 +192,63 @@ class BKTLayer(jit.ScriptModule):
             return self._A 
         
         return nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
-        
-    @jit.script_method
-    def forward(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
-        """
-            prev_kc: [n_batch, t]
-            curr_kc: [n_batch, t]
-            prev_corr: [n_batch, t]
-        """
-        outputs = th.jit.annotate(List[Tensor], [])
-        
-        pc, state = self.cell.forward_first_trial(curr_kc[:,0], A)
-        outputs += [pc]
-        
-        for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
-            
-            outputs += [pc]
-        return th.stack(outputs).T, state
 
     @jit.script_method
-    def forward_from_state(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, state: Tensor, A: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, A: Tensor) -> Tuple[Tensor, Tuple[Tensor, Tensor, Tensor]]:
         """
             prev_kc: [n_batch, t]
             curr_kc: [n_batch, t]
             prev_corr: [n_batch, t]
-            state: [n_batch, n_kcs]
         """
         outputs = th.jit.annotate(List[Tensor], [])
         
-        pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, A)
+        state, ability_state, pc_given_alpha = self.cell.forward_first_trial(curr_kc[:,0], A)
+        pc = (th.softmax(ability_state,dim=1) * pc_given_alpha).sum(1)
         outputs += [pc]
         
         for i in range(1, prev_kc.shape[1]):
-            pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A)
-            
+            state, ability_state, pc_given_alpha = self.cell(prev_kc[:,i], curr_kc[:, i], prev_corr[:,i], A, (state, ability_state, pc_given_alpha))
+            pc = (th.softmax(ability_state,dim=1) * pc_given_alpha).sum(1)
             outputs += [pc]
-        return th.stack(outputs).T, state
+        
+        outputs = th.stack(outputs)
+        outputs = th.transpose(outputs, 0, 1)
+        
+        return outputs, (state, ability_state, pc_given_alpha)
+
+    # @jit.script_method
+    # def forward_from_state(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, A: Tensor, full_state: Tuple[Tensor,Tensor,Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
+    #     """
+    #         prev_kc: [n_batch, t]
+    #         curr_kc: [n_batch, t]
+    #         prev_corr: [n_batch, t]
+    #         state: [n_batch, n_kcs]
+    #     """
+    #     outputs = th.jit.annotate(List[Tensor], [])
+        
+    #     pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, A, self.abilities)
+    #     outputs += [pc]
+        
+    #     for i in range(1, prev_kc.shape[1]):
+    #         pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A, self.abilities)
+            
+    #         outputs += [pc]
+
+        
+    #     outputs = th.stack(outputs)
+    #     outputs = th.transpose(outputs, 0, 1)
+
+    #     loglik = self.seq_logprobs(outputs)
+
+    #     return outputs, state, loglik
+    
 
 
 class BKTModel(nn.Module):
     def __init__(self, n_kcs, n_obs_kcs):
         super(BKTModel, self).__init__()
         
-        self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs)
+        self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs, 30)
         self._A = None 
 
     def sample_assignment(self, tau):
@@ -174,15 +256,11 @@ class BKTModel(nn.Module):
 
     def forward(self, prev_kc, curr_kc, prev_corr):
 
-        probs, state = self.bktlayer(prev_kc, curr_kc, prev_corr, self._A)
-        
-        return probs, state
+        return self.bktlayer(prev_kc, curr_kc, prev_corr, self._A)
 
     def forward_from_state(self, prev_kc, curr_kc, prev_corr, state):
-        probs, state = self.bktlayer.forward_from_state(prev_kc, curr_kc, prev_corr, state, self._A)
+        return self.bktlayer.forward_from_state(prev_kc, curr_kc, prev_corr, state, self._A)
         
-        return probs, state
-
 def train(train_seqs, valid_seqs, n_obs_kcs, 
     n_kcs=5,
     epochs=100, 
@@ -223,24 +301,24 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
                 model.sample_assignment(tau)
                 probs, state = model(prev_skill, curr_skill, prev_correct)
             else:
-                
-                state = state.detach()
+                pass 
 
-                # trim the state
-                n_state_size = state.shape[0]
-                n_diff = n_state_size - len(seqs)
-                if n_diff > 0:
-                    state = state[n_diff:,:]
+                # state = state.detach()
 
-                prev_skill = prev_skill.to(device)
-                curr_skill = curr_skill.to(device)
-                prev_correct = prev_correct.to(device)
-                state = state.to(device)
+                # # trim the state
+                # n_state_size = state.shape[0]
+                # n_diff = n_state_size - len(seqs)
+                # if n_diff > 0:
+                #     state = state[n_diff:,:]
 
-                model.sample_assignment(tau)
-                probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
+                # prev_skill = prev_skill.to(device)
+                # curr_skill = curr_skill.to(device)
+                # prev_correct = prev_correct.to(device)
+                # state = state.to(device)
+
+                # model.sample_assignment(tau)
+                # probs, state, loglik = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
             
-            #probs = th.clip(probs, 0.01, 0.99)
             curr_correct = curr_correct.to(device)
             mask = mask.to(device)
             loss = loss_fn(probs, curr_correct)
@@ -314,18 +392,19 @@ def _predict(model, seqs, n_batch_seqs, n_batch_trials, device):
 
             probs, state = model(prev_skill, curr_skill, prev_correct)
         else:
-            # trim the state
-            n_state_size = state.shape[0]
-            n_diff = n_state_size - len(seqs)
-            if n_diff > 0:
-                state = state[n_diff:,:]
+            pass
+            # # trim the state
+            # n_state_size = state.shape[0]
+            # n_diff = n_state_size - len(seqs)
+            # if n_diff > 0:
+            #     state = state[n_diff:,:]
 
-            prev_skill = prev_skill.to(device)
-            curr_skill = curr_skill.to(device)
-            prev_correct = prev_correct.to(device)
-            state = state.to(device)
+            # prev_skill = prev_skill.to(device)
+            # curr_skill = curr_skill.to(device)
+            # prev_correct = prev_correct.to(device)
+            # state = state.to(device)
 
-            probs, state = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
+            # probs, state, loglik = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
         
         probs = probs.cpu()
         
@@ -372,9 +451,9 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/algebra2010.csv")
+    df = pd.read_csv("data/datasets/synthetic.csv")
     #df['skill'] = df['core_skill']
-    splits = np.load("data/splits/algebra2010.npy")
+    splits = np.load("data/splits/synthetic.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -393,7 +472,7 @@ def main():
 
     n_obs_kcs = int(np.max(df['skill']) + 1)
     model = train(train_seqs, valid_seqs, n_obs_kcs, 
-        n_kcs=5, 
+        n_kcs=n_obs_kcs, 
         device='cpu', 
         learning_rate=0.1, 
         epochs=100, 
