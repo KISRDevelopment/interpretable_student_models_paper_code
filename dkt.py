@@ -8,15 +8,17 @@ import numpy as np
 import sequences
 import pandas as pd 
 import sklearn.metrics
+import copy 
 
 class DKTModel(nn.Module):
     def __init__(self, n_kcs, n_hidden):
         super(DKTModel, self).__init__()
         
         self.n_kcs = n_kcs 
-        self.cell = nn.GRU(2 * n_kcs, n_hidden, batch_first=True)
+        self.cell = nn.LSTM(2 * n_kcs, n_hidden, num_layers=1, batch_first=True)
         self.ff = nn.Linear(n_hidden, n_kcs)
-        
+        self.dropout = nn.Dropout(0)
+
     def forward(self, cell_input, curr_kc):
         """
             input: [n_batch, t, 2*n_kcs]
@@ -24,24 +26,27 @@ class DKTModel(nn.Module):
         """
         
         cell_output, last_state = self.cell(cell_input)
-        
+        cell_output = self.dropout(cell_output)
+
         kc_probs = th.sigmoid(self.ff(cell_output)) # [n_batch, t, n_kcs]
         probs = (kc_probs * curr_kc).sum(dim=2) # [n_batch, t]
         
-        return probs, last_state.squeeze(dim=0)
+        return probs, last_state
 
     def forward_from_state(self, cell_input, curr_kc, state):
         """
             input: [n_batch, t, 2*n_kcs]
             curr_kc: [n_batch, t, n_kcs]
-            state: [n_batch, n_hidden]
+            state: ([n_layers, n_batch, n_hidden], [n_layers, n_batch, n_hidden])
         """
         
-        cell_output, last_state = self.cell(cell_input, state[None,:,:])
+        cell_output, last_state = self.cell(cell_input, state)
+        cell_output = self.dropout(cell_output)
+        
         kc_probs = th.sigmoid(self.ff(cell_output)) # [n_batch, t, n_kcs]
         probs = (kc_probs * curr_kc).sum(dim=2) # [n_batch, t]
         
-        return probs, last_state.squeeze(dim=0)
+        return probs, last_state
 
 
 def train(train_seqs, valid_seqs, n_kcs,
@@ -74,15 +79,17 @@ def train(train_seqs, valid_seqs, n_kcs,
             if new_seqs:
                 probs, state = model(cell_input, curr_skill)
             else:
-                state = state.detach()
+                hn, cn = state[0].detach(), state[1].detach()
 
                 # trim the state
-                n_state_size = state.shape[0]
+                n_state_size = hn.shape[1]
                 n_diff = n_state_size - len(seqs)
+
                 if n_diff > 0:
-                    state = state[n_diff:,:]
+                    hn = hn[:,n_diff:,:]
+                    cn = cn[:,n_diff:,:]
                 
-                probs, state = model.forward_from_state(cell_input, curr_skill, state)
+                probs, state = model.forward_from_state(cell_input, curr_skill, (hn, cn))
             
             loss = loss_fn(probs, curr_correct)
             loss = loss * mask
@@ -101,15 +108,16 @@ def train(train_seqs, valid_seqs, n_kcs,
             auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
             print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.2f" % (e, np.mean(losses), valid_loss, auc_roc))
 
-            epochs_since_last_best += 1
-
+            
             #if auc_roc > best_val_auc:
             if valid_loss < best_val_loss:
                 best_val_loss = valid_loss
                 best_val_auc = auc_roc
-                best_state = model.state_dict()
+                best_state = copy.deepcopy(model.state_dict())
                 epochs_since_last_best = 0
-            
+            else:
+                epochs_since_last_best += 1
+
             if epochs_since_last_best >= patience:
                 break
 
@@ -130,12 +138,15 @@ def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100):
             if new_seqs:
                 probs, state = model(cell_input, curr_skill)
             else:
+                hn, cn = state
                 # trim the state
-                n_state_size = state.shape[0]
+                n_state_size = hn.shape[1]
                 n_diff = n_state_size - len(seqs)
                 if n_diff > 0:
-                    state = state[n_diff:,:]
-                probs, state = model.forward_from_state(cell_input, curr_skill, state)
+                    hn = hn[:,n_diff:,:]
+                    cn = cn[:,n_diff:,:]
+                
+                probs, state = model.forward_from_state(cell_input, curr_skill, (hn, cn))
             
             probs = probs.flatten()
             curr_correct = curr_correct.flatten()
@@ -182,36 +193,48 @@ def transform(subseqs, n_kcs):
 def main():
     df = pd.read_csv("data/datasets/gervetetal_statics.csv")
     splits = np.load("data/splits/gervetetal_statics.npy")
-    split = splits[0, :]
 
-    train_ix = split == 2
-    valid_ix = split == 1
-    test_ix = split == 0
+    all_ytrue = []
+    all_ypred = []
+    for s in range(1):
+        split = splits[s, :]
 
-    train_df = df[train_ix]
-    valid_df = df[valid_ix]
-    test_df = df[test_ix]
+        train_ix = split == 2
+        valid_ix = split == 1
+        test_ix = split == 0
 
-    train_students = set(train_df['student'])
-    valid_students = set(valid_df['student'])
+        train_df = df[train_ix]
+        valid_df = df[valid_ix]
+        test_df = df[test_ix]
 
-    train_seqs = sequences.make_sequences(df, train_students)
-    valid_seqs = sequences.make_sequences(df, valid_students)
+        train_students = set(train_df['student'])
+        valid_students = set(valid_df['student'])
 
-    n_obs_kcs = int(np.max(df['skill']) + 1)
-    model = train(train_seqs, valid_seqs, 
-        n_kcs=n_obs_kcs, 
-        n_hidden=100,
-        learning_rate=0.001, 
-        epochs=100, 
-        n_batch_seqs=100, 
-        n_batch_trials=50)
+        train_seqs = sequences.make_sequences(df, train_students)
+        valid_seqs = sequences.make_sequences(df, valid_students)
 
-    test_students = set(test_df['student'])
-    test_seqs = sequences.make_sequences(df, test_students)
-    ytrue_test, ypred_test = predict(model, test_seqs)
-    auc_roc = sklearn.metrics.roc_auc_score(ytrue_test, ypred_test)
-    test_loss = -np.mean(ytrue_test * np.log(ypred_test) + (1-ytrue_test) * np.log(1-ypred_test))
+        n_obs_kcs = int(np.max(df['skill']) + 1)
+        model = train(train_seqs, valid_seqs, 
+            n_kcs=n_obs_kcs, 
+            n_hidden=200,
+            learning_rate=0.001, 
+            epochs=100, 
+            patience=5,
+            n_batch_seqs=100, 
+            n_batch_trials=50)
+
+        test_students = set(test_df['student'])
+        test_seqs = sequences.make_sequences(df, test_students)
+        ytrue_test, ypred_test = predict(model, test_seqs)
+        
+        all_ytrue.extend(ytrue_test)
+        all_ypred.extend(ypred_test)
+    
+    all_ytrue = np.array(all_ytrue)
+    all_ypred = np.array(all_ypred)
+
+    auc_roc = sklearn.metrics.roc_auc_score(all_ytrue, all_ypred)
+    test_loss = -np.mean(all_ytrue * np.log(all_ypred) + (1-all_ytrue) * np.log(1-all_ypred))
 
     print("Test loss: %0.4f, auc: %0.2f" % (test_loss, auc_roc))
 
