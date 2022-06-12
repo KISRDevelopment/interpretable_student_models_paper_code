@@ -16,8 +16,7 @@ class DKTModel(nn.Module):
         self.n_kcs = n_kcs 
         self.cell = nn.GRU(2 * n_kcs, n_hidden, batch_first=True)
         self.ff = nn.Linear(n_hidden, n_kcs)
-        self.sm = nn.Softmax(dim=2)
-
+        
     def forward(self, cell_input, curr_kc):
         """
             input: [n_batch, t, 2*n_kcs]
@@ -25,7 +24,8 @@ class DKTModel(nn.Module):
         """
         
         cell_output, last_state = self.cell(cell_input)
-        kc_probs = self.sm(self.ff(cell_output)) # [n_batch, t, n_kcs]
+        
+        kc_probs = th.sigmoid(self.ff(cell_output)) # [n_batch, t, n_kcs]
         probs = (kc_probs * curr_kc).sum(dim=2) # [n_batch, t]
         
         return probs, last_state.squeeze(dim=0)
@@ -38,7 +38,7 @@ class DKTModel(nn.Module):
         """
         
         cell_output, last_state = self.cell(cell_input, state[None,:,:])
-        kc_probs = self.sm(self.ff(cell_output)) # [n_batch, t, n_kcs]
+        kc_probs = th.sigmoid(self.ff(cell_output)) # [n_batch, t, n_kcs]
         probs = (kc_probs * curr_kc).sum(dim=2) # [n_batch, t]
         
         return probs, last_state.squeeze(dim=0)
@@ -93,24 +93,25 @@ def train(train_seqs, valid_seqs, n_kcs,
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+        
+        with th.no_grad():
+            ytrue_valid, ypred_valid = predict(model, valid_seqs)
+            valid_loss = loss_fn(th.tensor(ypred_valid), th.tensor(ytrue_valid)).mean().numpy()
             
-        ytrue_valid, ypred_valid = predict(model, valid_seqs)
-        valid_loss = loss_fn(th.tensor(ypred_valid), th.tensor(ytrue_valid)).mean().numpy()
-        
-        auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
-        print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.2f" % (e, np.mean(losses), valid_loss, auc_roc))
+            auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
+            print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.2f" % (e, np.mean(losses), valid_loss, auc_roc))
 
-        epochs_since_last_best += 1
+            epochs_since_last_best += 1
 
-        #if auc_roc > best_val_auc:
-        if valid_loss < best_val_loss:
-            best_val_loss = valid_loss
-            best_val_auc = auc_roc
-            best_state = model.state_dict()
-            epochs_since_last_best = 0
-        
-        if epochs_since_last_best >= patience:
-            break
+            #if auc_roc > best_val_auc:
+            if valid_loss < best_val_loss:
+                best_val_loss = valid_loss
+                best_val_auc = auc_roc
+                best_state = model.state_dict()
+                epochs_since_last_best = 0
+            
+            if epochs_since_last_best >= patience:
+                break
 
     model.load_state_dict(best_state)
     return model 
@@ -179,8 +180,8 @@ def transform(subseqs, n_kcs):
     return th.tensor(cell_input).float(), th.tensor(curr_skill).float(), th.tensor(correct).float(), th.tensor(included).float()
 
 def main():
-    df = pd.read_csv("data/datasets/synthetic.csv")
-    splits = np.load("data/splits/synthetic.npy")
+    df = pd.read_csv("data/datasets/gervetetal_statics.csv")
+    splits = np.load("data/splits/gervetetal_statics.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -201,7 +202,7 @@ def main():
     model = train(train_seqs, valid_seqs, 
         n_kcs=n_obs_kcs, 
         n_hidden=100,
-        learning_rate=0.1, 
+        learning_rate=0.001, 
         epochs=100, 
         n_batch_seqs=100, 
         n_batch_trials=50)

@@ -52,9 +52,6 @@ class BKTCell(jit.ScriptModule):
         # perform update, ability_state is now: log(p(y_1,...,y_(t-1), a_s))
         ability_state = prev_trial_logprob + ability_state
 
-        # normalize the posterior to get p(a_s|y_1...y_(t-1))
-        #normed_ability_posterior = th.softmax(ability_state, dim=1)
-
         #
         # update hmm state
         #
@@ -102,9 +99,6 @@ class BKTCell(jit.ScriptModule):
         # [n_batch, n_abilities]
         p_curr_correct_given_alpha = p_correct_given_curr_h0 * (1-curr_state) + p_correct_given_curr_h1 * curr_state
         
-        # marginalize out the abilities  [n_batch,]
-        #p_curr_correct = (p_curr_correct_given_alpha * normed_ability_posterior).sum(1)
-
         return state, ability_state, p_curr_correct_given_alpha
     
     @jit.script_method
@@ -216,33 +210,28 @@ class BKTLayer(jit.ScriptModule):
         
         return outputs, (state, ability_state, pc_given_alpha)
 
-    # @jit.script_method
-    # def forward_from_state(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, A: Tensor, full_state: Tuple[Tensor,Tensor,Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
-    #     """
-    #         prev_kc: [n_batch, t]
-    #         curr_kc: [n_batch, t]
-    #         prev_corr: [n_batch, t]
-    #         state: [n_batch, n_kcs]
-    #     """
-    #     outputs = th.jit.annotate(List[Tensor], [])
+    @jit.script_method
+    def forward_from_state(self, prev_kc: Tensor, curr_kc: Tensor, prev_corr: Tensor, A: Tensor, full_state: Tuple[Tensor, Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor, Tensor]]:
+        """
+            prev_kc: [n_batch, t]
+            curr_kc: [n_batch, t]
+            prev_corr: [n_batch, t]
+        """
+        outputs = th.jit.annotate(List[Tensor], [])
         
-    #     pc, state = self.cell.forward_first_trial_from_state(curr_kc[:,0], state, A, self.abilities)
-    #     outputs += [pc]
+        state, ability_state, pc_given_alpha = self.cell(prev_kc[:,0], curr_kc[:,0], prev_corr[:,0], A, full_state)
+        pc = (th.softmax(ability_state,dim=1) * pc_given_alpha).sum(1)
+        outputs += [pc]
         
-    #     for i in range(1, prev_kc.shape[1]):
-    #         pc, state = self.cell((prev_kc[:,i], curr_kc[:, i], prev_corr[:,i]), state, A, self.abilities)
-            
-    #         outputs += [pc]
-
+        for i in range(1, prev_kc.shape[1]):
+            state, ability_state, pc_given_alpha = self.cell(prev_kc[:,i], curr_kc[:, i], prev_corr[:,i], A, (state, ability_state, pc_given_alpha))
+            pc = (th.softmax(ability_state,dim=1) * pc_given_alpha).sum(1)
+            outputs += [pc]
         
-    #     outputs = th.stack(outputs)
-    #     outputs = th.transpose(outputs, 0, 1)
-
-    #     loglik = self.seq_logprobs(outputs)
-
-    #     return outputs, state, loglik
-    
-
+        outputs = th.stack(outputs)
+        outputs = th.transpose(outputs, 0, 1)
+        
+        return outputs, (state, ability_state, pc_given_alpha)
 
 class BKTModel(nn.Module):
     def __init__(self, n_kcs, n_obs_kcs):
@@ -259,7 +248,7 @@ class BKTModel(nn.Module):
         return self.bktlayer(prev_kc, curr_kc, prev_corr, self._A)
 
     def forward_from_state(self, prev_kc, curr_kc, prev_corr, state):
-        return self.bktlayer.forward_from_state(prev_kc, curr_kc, prev_corr, state, self._A)
+        return self.bktlayer.forward_from_state(prev_kc, curr_kc, prev_corr, self._A, state)
         
 def train(train_seqs, valid_seqs, n_obs_kcs, 
     n_kcs=5,
@@ -299,25 +288,28 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
                 prev_correct = prev_correct.to(device)
 
                 model.sample_assignment(tau)
-                probs, state = model(prev_skill, curr_skill, prev_correct)
+                probs, full_state = model(prev_skill, curr_skill, prev_correct)
             else:
-                pass 
+                
+                state, ability_state, pc_given_alpha  = full_state
+                state = state.detach()
+                ability_state = ability_state.detach()
+                pc_given_alpha = pc_given_alpha.detach()
 
-                # state = state.detach()
+                # trim the state
+                n_state_size = state.shape[0]
+                n_diff = n_state_size - len(seqs)
+                if n_diff > 0:
+                    state = state[n_diff:,:]
+                    ability_state = ability_state[n_diff:,:]
+                    pc_given_alpha = pc_given_alpha[n_diff:,:]
 
-                # # trim the state
-                # n_state_size = state.shape[0]
-                # n_diff = n_state_size - len(seqs)
-                # if n_diff > 0:
-                #     state = state[n_diff:,:]
-
-                # prev_skill = prev_skill.to(device)
-                # curr_skill = curr_skill.to(device)
-                # prev_correct = prev_correct.to(device)
-                # state = state.to(device)
-
-                # model.sample_assignment(tau)
-                # probs, state, loglik = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
+                prev_skill = prev_skill.to(device)
+                curr_skill = curr_skill.to(device)
+                prev_correct = prev_correct.to(device)
+                
+                model.sample_assignment(tau)
+                probs, full_state = model.forward_from_state(prev_skill, curr_skill, prev_correct, (state, ability_state, pc_given_alpha))
             
             curr_correct = curr_correct.to(device)
             mask = mask.to(device)
@@ -390,21 +382,22 @@ def _predict(model, seqs, n_batch_seqs, n_batch_trials, device):
             curr_skill = curr_skill.to(device)
             prev_correct = prev_correct.to(device)
 
-            probs, state = model(prev_skill, curr_skill, prev_correct)
+            probs, full_state = model(prev_skill, curr_skill, prev_correct)
         else:
-            pass
-            # # trim the state
-            # n_state_size = state.shape[0]
-            # n_diff = n_state_size - len(seqs)
-            # if n_diff > 0:
-            #     state = state[n_diff:,:]
+            state, ability_state, pc_given_alpha  = full_state
+            # trim the state
+            n_state_size = state.shape[0]
+            n_diff = n_state_size - len(seqs)
+            if n_diff > 0:
+                state = state[n_diff:,:]
+                ability_state = ability_state[n_diff:,:]
+                pc_given_alpha = pc_given_alpha[n_diff:,:]
 
-            # prev_skill = prev_skill.to(device)
-            # curr_skill = curr_skill.to(device)
-            # prev_correct = prev_correct.to(device)
-            # state = state.to(device)
-
-            # probs, state, loglik = model.forward_from_state(prev_skill, curr_skill,  prev_correct, state)
+            prev_skill = prev_skill.to(device)
+            curr_skill = curr_skill.to(device)
+            prev_correct = prev_correct.to(device)
+            
+            probs, full_state = model.forward_from_state(prev_skill, curr_skill, prev_correct, (state, ability_state, pc_given_alpha))
         
         probs = probs.cpu()
         
@@ -451,9 +444,9 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/synthetic.csv")
+    df = pd.read_csv("data/datasets/gervetetal_statics.csv")
     #df['skill'] = df['core_skill']
-    splits = np.load("data/splits/synthetic.npy")
+    splits = np.load("data/splits/gervetetal_statics.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -472,7 +465,7 @@ def main():
 
     n_obs_kcs = int(np.max(df['skill']) + 1)
     model = train(train_seqs, valid_seqs, n_obs_kcs, 
-        n_kcs=n_obs_kcs, 
+        n_kcs=10, 
         device='cpu', 
         learning_rate=0.1, 
         epochs=100, 
