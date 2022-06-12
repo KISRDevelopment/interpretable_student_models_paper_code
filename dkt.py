@@ -1,4 +1,3 @@
-from socket import TIPC_HIGH_IMPORTANCE
 import torch as th
 import torch.nn as nn
 import torch.jit as jit
@@ -17,36 +16,21 @@ class DKTModel(nn.Module):
         self.n_kcs = n_kcs 
         self.cell = nn.LSTM(2 * n_kcs, n_hidden, num_layers=1, batch_first=True)
         self.ff = nn.Linear(n_hidden, n_kcs)
-        self.dropout = nn.Dropout(0)
+        self.dropout = nn.Dropout(0.5)
 
-    def forward(self, cell_input, curr_kc):
+    def forward(self, cell_input, curr_kc, state=None):
         """
             input: [n_batch, t, 2*n_kcs]
             curr_kc: [n_batch, t, n_kcs]
-        """
-        
-        cell_output, last_state = self.cell(cell_input)
-        cell_output = self.dropout(cell_output)
-
-        kc_probs = th.sigmoid(self.ff(cell_output)) # [n_batch, t, n_kcs]
-        probs = (kc_probs * curr_kc).sum(dim=2) # [n_batch, t]
-        
-        return probs, last_state
-
-    def forward_from_state(self, cell_input, curr_kc, state):
-        """
-            input: [n_batch, t, 2*n_kcs]
-            curr_kc: [n_batch, t, n_kcs]
-            state: ([n_layers, n_batch, n_hidden], [n_layers, n_batch, n_hidden])
         """
         
         cell_output, last_state = self.cell(cell_input, state)
         cell_output = self.dropout(cell_output)
+
+        kc_logits = self.ff(cell_output) # [n_batch, t, n_kcs]
+        logits = (kc_logits * curr_kc).sum(dim=2) # [n_batch, t]
         
-        kc_probs = th.sigmoid(self.ff(cell_output)) # [n_batch, t, n_kcs]
-        probs = (kc_probs * curr_kc).sum(dim=2) # [n_batch, t]
-        
-        return probs, last_state
+        return logits, last_state
 
 
 def train(train_seqs, valid_seqs, n_kcs,
@@ -57,27 +41,29 @@ def train(train_seqs, valid_seqs, n_kcs,
     learning_rate=1e-1,
     patience=10):
     
-    loss_fn = nn.BCELoss(reduction='none')
+    loss_fn = nn.BCEWithLogitsLoss()
 
     model = DKTModel(n_kcs, n_hidden)
 
-    optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
+    optimizer = th.optim.Adam(model.parameters(), lr=learning_rate)
 
-    best_val_auc = 0.5 
     best_val_loss = np.inf 
     best_state = None 
     epochs_since_last_best = 0
+    best_val_auc = 0.5
 
     for e in range(epochs):
         np.random.shuffle(train_seqs)
         losses = []
+
+        model.train()
 
         for seqs, new_seqs in sequences.iterate_batched(train_seqs, n_batch_seqs, n_batch_trials):
 
             cell_input, curr_skill, curr_correct, mask = transform(seqs, n_kcs)
             
             if new_seqs:
-                probs, state = model(cell_input, curr_skill)
+                logits, state = model(cell_input, curr_skill)
             else:
                 hn, cn = state[0].detach(), state[1].detach()
 
@@ -89,28 +75,35 @@ def train(train_seqs, valid_seqs, n_kcs,
                     hn = hn[:,n_diff:,:]
                     cn = cn[:,n_diff:,:]
                 
-                probs, state = model.forward_from_state(cell_input, curr_skill, (hn, cn))
+                logits, state = model(cell_input, curr_skill, (hn, cn))
             
-            loss = loss_fn(probs, curr_correct)
-            loss = loss * mask
-            loss = loss.sum() / mask.sum()
+            logits = logits.view(-1)
+            curr_correct = curr_correct.view(-1)
+            mask = mask.view(-1).bool()
 
-            losses.append(loss.item())
-            
+            logits = logits[mask]
+            curr_correct = curr_correct[mask]
+
+            loss = loss_fn(logits, curr_correct)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        
-        with th.no_grad():
-            ytrue_valid, ypred_valid = predict(model, valid_seqs)
-            valid_loss = loss_fn(th.tensor(ypred_valid), th.tensor(ytrue_valid)).mean().numpy()
+
+            losses.append(loss.item())
             
-            auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, ypred_valid)
+        model.eval()
+
+        with th.no_grad():
+
+            ytrue_valid, logit_ypred_valid = predict(model, valid_seqs)
+            valid_loss = loss_fn(logit_ypred_valid, ytrue_valid)
+            
+            auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, logit_ypred_valid)
             print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.2f" % (e, np.mean(losses), valid_loss, auc_roc))
 
-            
-            #if auc_roc > best_val_auc:
-            if valid_loss < best_val_loss:
+            if auc_roc > best_val_auc:
+            #if valid_loss < best_val_loss:
                 best_val_loss = valid_loss
                 best_val_auc = auc_roc
                 best_state = copy.deepcopy(model.state_dict())
@@ -125,18 +118,17 @@ def train(train_seqs, valid_seqs, n_kcs,
     return model 
 
 def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100):
-
+    model.eval()
     with th.no_grad():
-        final_probs = []
 
-        all_probs = []
+        all_logits = []
         all_labels = []
 
         for seqs, new_seqs in sequences.iterate_batched(test_seqs, n_batch_seqs, n_batch_trials):
             cell_input, curr_skill, curr_correct, mask = transform(seqs, model.n_kcs)
             
             if new_seqs:
-                probs, state = model(cell_input, curr_skill)
+                logits, state = model(cell_input, curr_skill)
             else:
                 hn, cn = state
                 # trim the state
@@ -146,21 +138,21 @@ def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100):
                     hn = hn[:,n_diff:,:]
                     cn = cn[:,n_diff:,:]
                 
-                probs, state = model.forward_from_state(cell_input, curr_skill, (hn, cn))
+                logits, state = model(cell_input, curr_skill, (hn, cn))
             
-            probs = probs.flatten()
+            logits = logits.flatten()
             curr_correct = curr_correct.flatten()
             mask = mask.flatten().bool()
 
-            probs = probs[mask]
+            logits = logits[mask]
             curr_correct = curr_correct[mask]
-            all_probs.append(probs)
+            all_logits.append(logits)
             all_labels.append(curr_correct)
         
-        all_probs = th.concat(all_probs).numpy()
-        all_labels = th.concat(all_labels).numpy()
+        all_logits = th.concat(all_logits)
+        all_labels = th.concat(all_labels)
 
-    return all_labels, all_probs
+    return all_labels, all_logits
 
 def transform(subseqs, n_kcs):
     n_batch = len(subseqs)
@@ -196,7 +188,7 @@ def main():
 
     all_ytrue = []
     all_ypred = []
-    for s in range(1):
+    for s in range(splits.shape[0]):
         split = splits[s, :]
 
         train_ix = split == 2
@@ -217,26 +209,25 @@ def main():
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_obs_kcs, 
             n_hidden=200,
-            learning_rate=0.001, 
+            learning_rate=0.01, 
             epochs=100, 
-            patience=5,
+            patience=10,
             n_batch_seqs=100, 
             n_batch_trials=50)
 
         test_students = set(test_df['student'])
         test_seqs = sequences.make_sequences(df, test_students)
-        ytrue_test, ypred_test = predict(model, test_seqs)
+        ytrue_test, logit_ypred_test = predict(model, test_seqs)
         
-        all_ytrue.extend(ytrue_test)
-        all_ypred.extend(ypred_test)
+        all_ytrue.extend(ytrue_test.numpy())
+        all_ypred.extend(logit_ypred_test.numpy())
     
     all_ytrue = np.array(all_ytrue)
     all_ypred = np.array(all_ypred)
 
     auc_roc = sklearn.metrics.roc_auc_score(all_ytrue, all_ypred)
-    test_loss = -np.mean(all_ytrue * np.log(all_ypred) + (1-all_ytrue) * np.log(1-all_ypred))
-
-    print("Test loss: %0.4f, auc: %0.2f" % (test_loss, auc_roc))
+    
+    print("Test auc: %0.2f" % (auc_roc))
 
 
 if __name__ == "__main__":

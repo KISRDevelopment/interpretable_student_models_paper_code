@@ -81,6 +81,17 @@ def pad_to_multiple(seqs, multiple):
 
     return new_seqs
 
+def pad_to_max(seqs):
+    new_seqs = []
+    max_len = max([len(s) for s in seqs])
+    for seq in seqs:
+        to_pad = max_len - len(seq)
+        new_seq = seq[:]
+        if to_pad > 0:
+            new_seq.extend([None] * to_pad)
+        return new_seqs.append(new_seq)
+    return new_seqs
+    
 def make_prev_curr_sequences(seqs):
     """
         Changes sequences so that each has (prev, curr) which will make
