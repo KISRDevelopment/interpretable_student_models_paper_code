@@ -24,6 +24,15 @@ class DKTModel(nn.Module):
             curr_kc: [n_batch, t, n_kcs]
         """
         
+        # if state is None:
+        #     assert cell_input[:,0,:].sum() == 0
+        
+        # # [n_batch, t, 2*n_kcs + 1]
+        # cell_input = th.cat((cell_input, th.zeros((cell_input.shape[0], cell_input.shape[1],1))), dim=2)
+        # if state is None:
+        #     cell_input[:, 0, cell_input.shape[2]-1] = 1
+        
+        
         cell_output, last_state = self.cell(cell_input, state)
         cell_output = self.dropout(cell_output)
 
@@ -186,21 +195,33 @@ def main():
     df = pd.read_csv("data/datasets/gervetetal_statics.csv")
     splits = np.load("data/splits/gervetetal_statics.npy")
 
+    train_df = pd.read_csv("/home/mmkhajah/Projects/learner-performance-prediction/data/statics/preprocessed_data_train.csv", sep="\t")
+    train_students = list(set(train_df['user_id']))
+    np.random.shuffle(train_students)
+
+    n_valid = int(len(train_students) * 0.2)
+    valid_students = set(train_students[:n_valid])
+    train_students = set(train_students[n_valid:])
+
+
+    test_df = pd.read_csv("/home/mmkhajah/Projects/learner-performance-prediction/data/statics/preprocessed_data_test.csv", sep="\t")
+    test_students = set(test_df['user_id'])
+
     all_ytrue = []
     all_ypred = []
-    for s in range(splits.shape[0]):
+    for s in range(1):
         split = splits[s, :]
 
-        train_ix = split == 2
-        valid_ix = split == 1
-        test_ix = split == 0
+        # train_ix = split == 2
+        # valid_ix = split == 1
+        # test_ix = split == 0
 
-        train_df = df[train_ix]
-        valid_df = df[valid_ix]
-        test_df = df[test_ix]
+        # train_df = df[train_ix]
+        # valid_df = df[valid_ix]
+        # test_df = df[test_ix]
 
-        train_students = set(train_df['student'])
-        valid_students = set(valid_df['student'])
+        # train_students = set(train_df['student'])
+        # valid_students = set(valid_df['student'])
 
         train_seqs = sequences.make_sequences(df, train_students)
         valid_seqs = sequences.make_sequences(df, valid_students)
@@ -215,7 +236,7 @@ def main():
             n_batch_seqs=100, 
             n_batch_trials=50)
 
-        test_students = set(test_df['student'])
+        #test_students = set(test_df['student'])
         test_seqs = sequences.make_sequences(df, test_students)
         ytrue_test, logit_ypred_test = predict(model, test_seqs)
         
