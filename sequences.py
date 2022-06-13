@@ -35,6 +35,8 @@ def iterate_batched(seqs, n_batch_seqs, n_batch_trials):
 
         # grab the batch of sequences
         batch_seqs = seqs[from_seq_id:to_seq_id]
+        if n_batch_trials == 0:
+            n_batch_trials = max([len(s) for s in batch_seqs])
         batch_seqs = pad_to_multiple(batch_seqs, n_batch_trials)
         batch_seqs = make_prev_curr_sequences(batch_seqs)
 

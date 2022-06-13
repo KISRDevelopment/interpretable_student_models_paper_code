@@ -53,6 +53,7 @@ def train(train_seqs, valid_seqs, n_kcs,
     loss_fn = nn.BCEWithLogitsLoss()
 
     model = DKTModel(n_kcs, n_hidden)
+    model = model.cuda()
 
     optimizer = th.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -71,6 +72,9 @@ def train(train_seqs, valid_seqs, n_kcs,
 
             cell_input, curr_skill, curr_correct, mask = transform(seqs, n_kcs)
             
+            cell_input = cell_input.cuda()
+            curr_skill = curr_skill.cuda()
+
             if new_seqs:
                 logits, state = model(cell_input, curr_skill)
             else:
@@ -86,6 +90,8 @@ def train(train_seqs, valid_seqs, n_kcs,
                 
                 logits, state = model(cell_input, curr_skill, (hn, cn))
             
+            logits = logits.cpu()
+
             logits = logits.view(-1)
             curr_correct = curr_correct.view(-1)
             mask = mask.view(-1).bool()
@@ -109,7 +115,7 @@ def train(train_seqs, valid_seqs, n_kcs,
             valid_loss = loss_fn(logit_ypred_valid, ytrue_valid)
             
             auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, logit_ypred_valid)
-            print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.2f" % (e, np.mean(losses), valid_loss, auc_roc))
+            print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.6f" % (e, np.mean(losses), valid_loss, auc_roc))
 
             if auc_roc > best_val_auc:
             #if valid_loss < best_val_loss:
@@ -126,7 +132,7 @@ def train(train_seqs, valid_seqs, n_kcs,
     model.load_state_dict(best_state)
     return model 
 
-def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100):
+def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=0):
     model.eval()
     with th.no_grad():
 
@@ -136,6 +142,9 @@ def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100):
         for seqs, new_seqs in sequences.iterate_batched(test_seqs, n_batch_seqs, n_batch_trials):
             cell_input, curr_skill, curr_correct, mask = transform(seqs, model.n_kcs)
             
+            cell_input = cell_input.cuda()
+            curr_skill = curr_skill.cuda()
+
             if new_seqs:
                 logits, state = model(cell_input, curr_skill)
             else:
@@ -148,6 +157,8 @@ def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100):
                     cn = cn[:,n_diff:,:]
                 
                 logits, state = model(cell_input, curr_skill, (hn, cn))
+            
+            logits = logits.cpu()
             
             logits = logits.flatten()
             curr_correct = curr_correct.flatten()
@@ -232,7 +243,7 @@ def main():
             n_hidden=200,
             learning_rate=0.01, 
             epochs=100, 
-            patience=10,
+            patience=20,
             n_batch_seqs=100, 
             n_batch_trials=50)
 
@@ -248,7 +259,7 @@ def main():
 
     auc_roc = sklearn.metrics.roc_auc_score(all_ytrue, all_ypred)
     
-    print("Test auc: %0.2f" % (auc_roc))
+    print("Test auc: %0.6f" % (auc_roc))
 
 
 if __name__ == "__main__":
