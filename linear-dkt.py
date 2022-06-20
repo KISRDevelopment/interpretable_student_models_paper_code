@@ -9,39 +9,56 @@ import pandas as pd
 import sklearn.metrics
 import copy 
 
-class DKTModel(nn.Module):
+class DKTModel(jit.ScriptModule):
     def __init__(self, n_kcs, n_hidden):
         super(DKTModel, self).__init__()
         
         self.n_kcs = n_kcs 
-        self.cell = nn.LSTM(2 * n_kcs, n_hidden, num_layers=1, batch_first=True)
+        self.W = nn.Linear(n_hidden+2*n_kcs, n_hidden)
         self.ff = nn.Linear(n_hidden, n_kcs)
-        self.dropout = nn.Dropout(0.5)
+        self.initial_state = nn.Parameter(th.randn(n_hidden))
 
-    def forward(self, cell_input, curr_kc, state=None):
+    @jit.script_method
+    def forward(self, cell_input: Tensor, curr_kc: Tensor) -> Tuple[Tensor, Tensor]:
         """
             input: [n_batch, t, 2*n_kcs]
             curr_kc: [n_batch, t, n_kcs]
         """
         
-        # if state is None:
-        #     assert cell_input[:,0,:].sum() == 0
-        
-        # # [n_batch, t, 2*n_kcs + 1]
-        # cell_input = th.cat((cell_input, th.zeros((cell_input.shape[0], cell_input.shape[1],1))), dim=2)
-        # if state is None:
-        #     cell_input[:, 0, cell_input.shape[2]-1] = 1
-        
-        
-        cell_output, last_state = self.cell(cell_input, state)
-        cell_output = self.dropout(cell_output)
+        n_batch = cell_input.shape[0]
 
-        kc_logits = self.ff(cell_output) # [n_batch, t, n_kcs]
-        logits = (kc_logits * curr_kc).sum(dim=2) # [n_batch, t]
+        # [n_batch, n_hidden]
+        state = th.tile(self.initial_state, (n_batch, 1)) 
+        return self.forward_from_state(cell_input, curr_kc, state)
+
+    @jit.script_method
+    def forward_from_state(self, cell_input: Tensor, curr_kc: Tensor, state: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+            input: [n_batch, t, 2*n_kcs]
+            curr_kc: [n_batch, t, n_kcs]
+        """
         
-        return logits, last_state
+        outputs = th.jit.annotate(List[Tensor], [])
+        
+        n_batch = cell_input.shape[0]
 
-
+        # [n_batch, n_hidden]
+        state = state / th.norm(state, p=2, dim=1,keepdim=True)
+        
+        logit_pc = (self.ff(state) * curr_kc[:,0,:]).sum(1)
+        outputs += [logit_pc]
+        
+        for i in range(1, curr_kc.shape[1]):
+            aug_state = th.hstack((state, cell_input[:,i,:])) # [n_batch, n_hidden + 2*kcs]
+            state = self.W(aug_state)  # [n_batch, n_hidden]
+            state = state / th.norm(state, p=2, dim=1,keepdim=True)
+            logit_pc = (self.ff(state) * curr_kc[:,i,:]).sum(1)
+            outputs += [logit_pc]
+        
+        outputs = th.stack(outputs)
+        outputs = th.transpose(outputs, 0, 1)
+        
+        return outputs.contiguous(), state
 def train(train_seqs, valid_seqs, n_kcs,
     n_hidden=100,
     epochs=100, 
@@ -78,20 +95,20 @@ def train(train_seqs, valid_seqs, n_kcs,
             if new_seqs:
                 logits, state = model(cell_input, curr_skill)
             else:
-                hn, cn = state[0].detach(), state[1].detach()
+                state = state.detach()
 
                 # trim the state
-                n_state_size = hn.shape[1]
+                n_state_size = state.shape[0]
                 n_diff = n_state_size - len(seqs)
 
                 if n_diff > 0:
-                    hn = hn[:,n_diff:,:]
-                    cn = cn[:,n_diff:,:]
-                
-                logits, state = model(cell_input, curr_skill, (hn, cn))
+                    state = state[n_diff:,:]
+                    
+                logits, state = model.forward_from_state(cell_input, curr_skill, state)
+            
             
             logits = logits.cpu()
-
+            
             logits = logits.view(-1)
             curr_correct = curr_correct.view(-1)
             mask = mask.view(-1).bool()
@@ -113,7 +130,7 @@ def train(train_seqs, valid_seqs, n_kcs,
 
             ytrue_valid, logit_ypred_valid = predict(model, valid_seqs)
             valid_loss = loss_fn(logit_ypred_valid, ytrue_valid)
-            
+            #print(logit_ypred_valid)
             auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, logit_ypred_valid)
             print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.6f" % (e, np.mean(losses), valid_loss, auc_roc))
 
@@ -148,15 +165,14 @@ def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=0):
             if new_seqs:
                 logits, state = model(cell_input, curr_skill)
             else:
-                hn, cn = state
+                
                 # trim the state
-                n_state_size = hn.shape[1]
+                n_state_size = state.shape[0]
                 n_diff = n_state_size - len(seqs)
                 if n_diff > 0:
-                    hn = hn[:,n_diff:,:]
-                    cn = cn[:,n_diff:,:]
-                
-                logits, state = model(cell_input, curr_skill, (hn, cn))
+                    state = state[n_diff:,]
+                    
+                logits, state = model.forward_from_state(cell_input, curr_skill, state)
             
             logits = logits.cpu()
             
