@@ -27,6 +27,7 @@ def main():
 
     test_only_skills = set(np.unique(test_df['skill'])) - set(np.unique(train_df['skill'])) 
     
+    print("Number of skills: %d" % len(set(master_df['skill'])))
     remove_ix = test_df['skill'].isin(test_only_skills)
     print("Removing %d trials from test due to lack of skill in training" % np.sum(remove_ix))
 
@@ -48,7 +49,7 @@ def main():
     rand_probs = all_probs.copy()
     np.random.shuffle(rand_probs)
     auc_pr_null = sklearn.metrics.average_precision_score(all_obs, rand_probs)
-    print("Epoch Test AUC-ROC: %0.2f, AUC-PR: %0.2f (Null: %0.2f)" % (auc_roc, auc_pr, auc_pr_null))
+    print("Test AUC-ROC: %0.2f, AUC-PR: %0.2f (Null: %0.2f)" % (auc_roc, auc_pr, auc_pr_null))
 
     per_skill_roc = []
     for skill, seqs in test_seqs_by_skill.items():
@@ -101,10 +102,13 @@ def fit_bkt(seqs_by_skill, with_forgetting):
     """ fit one BKT model per skill """
 
     
-    points = np.linspace(0.01, 0.99, 5)
+    points = np.linspace(0.01, 0.99, 8)
 
-    search_space = np.array(list(itertools.product(points, [0], points, points, points)))
-
+    if with_forgetting:
+        search_space = np.array(list(itertools.product(points, points, points, points, points)))
+    else:
+        search_space = np.array(list(itertools.product(points, [0], points, points, points)))
+    
     p_by_skill = {}
     for skill in sorted(seqs_by_skill.keys()):
         seqs = seqs_by_skill[skill]
