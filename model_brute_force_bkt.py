@@ -45,8 +45,10 @@ def main():
 
     auc_roc = sklearn.metrics.roc_auc_score(all_obs, all_probs)
     auc_pr = sklearn.metrics.average_precision_score(all_obs, all_probs)
-
-    print("Epoch Test AUC-ROC: %0.2f, AUC-PR: %0.2f" % (auc_roc, auc_pr))
+    rand_probs = all_probs.copy()
+    np.random.shuffle(rand_probs)
+    auc_pr_null = sklearn.metrics.average_precision_score(all_obs, rand_probs)
+    print("Epoch Test AUC-ROC: %0.2f, AUC-PR: %0.2f (Null: %0.2f)" % (auc_roc, auc_pr, auc_pr_null))
 
     per_skill_roc = []
     for skill, seqs in test_seqs_by_skill.items():

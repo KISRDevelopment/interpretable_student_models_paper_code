@@ -356,6 +356,7 @@ def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu',
     return curr_correct, np.mean(np.hstack(final_probs), axis=1)
 
 def evaluate(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu', n_samples=5):
+    model.eval()
     with th.no_grad():
         losses = []
 
@@ -366,6 +367,7 @@ def evaluate(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu'
             loss = -np.mean(curr_correct * np.log(probs) + (1-curr_correct) * np.log(1-probs))
 
             losses.append(loss)
+    model.train()
 
     return np.mean(losses)
 
@@ -444,9 +446,9 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/gervetetal_statics.csv")
+    df = pd.read_csv("data/datasets/synthetic.csv")
     #df['skill'] = df['core_skill']
-    splits = np.load("data/splits/gervetetal_statics.npy")
+    splits = np.load("data/splits/synthetic.npy")
     split = splits[0, :]
 
     train_ix = split == 2
