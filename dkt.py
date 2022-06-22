@@ -1,13 +1,11 @@
 import torch as th
 import torch.nn as nn
-import torch.jit as jit
-from typing import List, Tuple
-from torch import Tensor
 import numpy as np
 import sequences
-import pandas as pd 
-import sklearn.metrics
+import pandas as pd
+import metrics
 import copy 
+import json 
 
 class DKTModel(nn.Module):
     def __init__(self, n_kcs, n_hidden):
@@ -57,7 +55,6 @@ def train(train_seqs, valid_seqs, n_kcs,
 
     optimizer = th.optim.Adam(model.parameters(), lr=learning_rate)
 
-    best_val_loss = np.inf 
     best_state = None 
     epochs_since_last_best = 0
     best_val_auc = 0.5
@@ -114,7 +111,8 @@ def train(train_seqs, valid_seqs, n_kcs,
             ytrue_valid, logit_ypred_valid = predict(model, valid_seqs)
             valid_loss = loss_fn(logit_ypred_valid, ytrue_valid)
             
-            auc_roc = sklearn.metrics.roc_auc_score(ytrue_valid, logit_ypred_valid)
+            m = metrics.calculate_metrics(ytrue_valid.numpy(), th.sigmoid(logit_ypred_valid).numpy())
+            auc_roc = m['auc_roc']
             print("%d Train loss: %0.4f, Valid loss: %0.4f, auc: %0.6f" % (e, np.mean(losses), valid_loss, auc_roc))
 
             if auc_roc > best_val_auc:
@@ -202,25 +200,20 @@ def transform(subseqs, n_kcs):
 
     return th.tensor(cell_input).float(), th.tensor(curr_skill).float(), th.tensor(correct).float(), th.tensor(included).float()
 
-def main():
-    df = pd.read_csv("data/datasets/gervetetal_assistments09.csv")
-    splits = np.load("data/splits/gervetetal_assistments09.npy")
-
-    # train_df = pd.read_csv("/home/mmkhajah/Projects/learner-performance-prediction/data/statics/preprocessed_data_train.csv", sep="\t")
-    # train_students = list(set(train_df['user_id']))
-    # np.random.shuffle(train_students)
-
-    # n_valid = int(len(train_students) * 0.2)
-    # valid_students = set(train_students[:n_valid])
-    # train_students = set(train_students[n_valid:])
+def main(cfg_path, dataset_name, output_path):
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
+    
 
 
-    # test_df = pd.read_csv("/home/mmkhajah/Projects/learner-performance-prediction/data/statics/preprocessed_data_test.csv", sep="\t")
-    # test_students = set(test_df['user_id'])
+    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    splits = np.load("data/splits/%s.npy" % dataset_name)
 
     all_ytrue = []
     all_ypred = []
-    for s in range(1):
+
+    results = []
+    for s in range(splits.shape[0]):
         split = splits[s, :]
 
         train_ix = split == 2
@@ -240,28 +233,33 @@ def main():
         n_obs_kcs = int(np.max(df['skill']) + 1)
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_obs_kcs, 
-            n_hidden=200,
-            learning_rate=0.01, 
-            epochs=100, 
-            patience=20,
-            n_batch_seqs=100, 
-            n_batch_trials=50)
+            **cfg)
 
         test_students = set(test_df['student'])
         test_seqs = sequences.make_sequences(df, test_students)
         ytrue_test, logit_ypred_test = predict(model, test_seqs)
         
-        all_ytrue.extend(ytrue_test.numpy())
-        all_ypred.extend(logit_ypred_test.numpy())
-    
+        ytrue_test = ytrue_test.numpy()
+        ypred_test = th.sigmoid(logit_ypred_test).numpy()
+
+        results.append(metrics.calculate_metrics(ytrue_test, ypred_test))
+        all_ytrue.extend(ytrue_test)
+        all_ypred.extend(ypred_test)
+
+        
     all_ytrue = np.array(all_ytrue)
     all_ypred = np.array(all_ypred)
 
-    auc_roc = sklearn.metrics.roc_auc_score(all_ytrue, all_ypred)
-    
-    print("Test auc: %0.6f" % (auc_roc))
+    overall_metrics = metrics.calculate_metrics(all_ytrue, all_ypred)
+    results.append(overall_metrics)
 
+    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])] + ['Overall'])
+    print(results_df)
+
+    results_df.to_csv(output_path)
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(*sys.argv[1:])
+
     
