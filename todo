@@ -1,2 +1,5 @@
 1. Run BKT on all Gervet et al datasets
 2. Run DKT on all Gervet et al dataset
+
+DKT:
+    - Update on each run through batch of sequences, not batch of trials

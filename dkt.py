@@ -46,10 +46,9 @@ def train(train_seqs, valid_seqs, n_kcs,
     n_batch_seqs=50, 
     n_batch_trials=100, 
     learning_rate=1e-1,
-    patience=10):
+    patience=10,
+    balanced_loss=False):
     
-    loss_fn = nn.BCEWithLogitsLoss()
-
     model = DKTModel(n_kcs, n_hidden)
     model = model.cuda()
 
@@ -65,50 +64,75 @@ def train(train_seqs, valid_seqs, n_kcs,
 
         model.train()
 
-        for seqs, new_seqs in sequences.iterate_batched(train_seqs, n_batch_seqs, n_batch_trials):
+        all_logits = []
+        all_y = []
+        all_mask = []
 
-            cell_input, curr_skill, curr_correct, mask = transform(seqs, n_kcs)
-            
-            cell_input = cell_input.cuda()
-            curr_skill = curr_skill.cuda()
+        for from_seq in range(0, len(train_seqs), n_batch_seqs):
+            to_seq = from_seq + n_batch_seqs
+            batch_seqs = train_seqs[from_seq:to_seq]
+            batch_seqs = sequences.pad_to_max(batch_seqs)
+            batch_seqs = sequences.make_prev_curr_sequences(batch_seqs)
 
-            if new_seqs:
-                logits, state = model(cell_input, curr_skill)
-            else:
-                hn, cn = state[0].detach(), state[1].detach()
+            n_seqs = len(batch_seqs)
+            n_trials = len(batch_seqs[0])
 
-                # trim the state
-                n_state_size = hn.shape[1]
-                n_diff = n_state_size - len(seqs)
+            batch_logits = th.zeros((n_seqs, n_trials)).cuda()
+            batch_label = th.zeros((n_seqs, n_trials)).cuda()
+            batch_mask = th.zeros((n_seqs, n_trials)).cuda()
 
-                if n_diff > 0:
-                    hn = hn[:,n_diff:,:]
-                    cn = cn[:,n_diff:,:]
+            for i in range(0, n_trials, n_batch_trials):
+                to_trial = i + n_batch_trials
+                block = [s[i:to_trial] for s in batch_seqs]
                 
-                logits, state = model(cell_input, curr_skill, (hn, cn))
-            
-            logits = logits.cpu()
+                cell_input, curr_skill, curr_correct, mask = transform(block, n_kcs)
+                
+                cell_input = cell_input.cuda()
+                curr_skill = curr_skill.cuda()
+                
+                if i == 0:
+                    logits, state = model(cell_input, curr_skill)
+                else:
+                    hn, cn = state[0].detach(), state[1].detach()
+                    logits, state = model(cell_input, curr_skill, (hn, cn))
 
-            logits = logits.view(-1)
-            curr_correct = curr_correct.view(-1)
-            mask = mask.view(-1).bool()
+                batch_logits[:, i:to_trial] = logits 
+                batch_label[:, i:to_trial] = curr_correct
+                batch_mask[:, i:to_trial] = mask 
+        
+            batch_logits = batch_logits.view(-1).cpu()
+            batch_label = batch_label.view(-1).cpu()
+            batch_mask = batch_mask.view(-1).bool().cpu()
 
-            logits = logits[mask]
-            curr_correct = curr_correct[mask]
+            batch_logits = batch_logits[batch_mask]
+            batch_label = batch_label[batch_mask]
 
-            loss = loss_fn(logits, curr_correct)
+            if balanced_loss:
+                pos_weight = th.tensor([(batch_label==0).sum()/(batch_label==1).sum()])
+            else:
+                pos_weight = th.tensor([1])
+                
+            loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+            loss = loss_fn(batch_logits, batch_label)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             losses.append(loss.item())
-            
+
+
         model.eval()
 
         with th.no_grad():
 
             ytrue_valid, logit_ypred_valid = predict(model, valid_seqs)
+            if balanced_loss:
+                pos_weight = th.tensor([(ytrue_valid==0).sum()/(ytrue_valid==1).sum()])
+            else:
+                pos_weight = th.tensor([1])
+            loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
             valid_loss = loss_fn(logit_ypred_valid, ytrue_valid)
             
             m = metrics.calculate_metrics(ytrue_valid.numpy(), th.sigmoid(logit_ypred_valid).numpy())
@@ -130,14 +154,14 @@ def train(train_seqs, valid_seqs, n_kcs,
     model.load_state_dict(best_state)
     return model 
 
-def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=0):
+def predict(model, test_seqs, n_batch_seqs=50, n_batch_trials=100000):
     model.eval()
     with th.no_grad():
 
         all_logits = []
         all_labels = []
 
-        for seqs, new_seqs in sequences.iterate_batched(test_seqs, n_batch_seqs, n_batch_trials):
+        for seqs, new_seqs in sequences.iterate_batched(test_seqs, n_batch_seqs, n_batch_trials, pad_to_maximum=True):
             cell_input, curr_skill, curr_correct, mask = transform(seqs, model.n_kcs)
             
             cell_input = cell_input.cuda()

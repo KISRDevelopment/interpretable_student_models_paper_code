@@ -25,7 +25,7 @@ def calc_padded_len(n, m):
     """
     return int( np.ceil(n / m) * m )
 
-def iterate_batched(seqs, n_batch_seqs, n_batch_trials):
+def iterate_batched(seqs, n_batch_seqs, n_batch_trials, pad_to_maximum=False):
     """
         Iterates in batches of size (n_batch_seqs, n_batch_trials)
     """
@@ -35,10 +35,10 @@ def iterate_batched(seqs, n_batch_seqs, n_batch_trials):
 
         # grab the batch of sequences
         batch_seqs = seqs[from_seq_id:to_seq_id]
-        multiple = n_batch_trials
-        if n_batch_trials == 0:
-            multiple = max([len(s) for s in batch_seqs])
-        batch_seqs = pad_to_multiple(batch_seqs, multiple)
+        if pad_to_maximum:
+            batch_seqs = pad_to_max(batch_seqs)
+        else:
+            batch_seqs = pad_to_multiple(batch_seqs, n_batch_seqs)
         batch_seqs = make_prev_curr_sequences(batch_seqs)
 
         # sort by length from shortest to longest to improve
@@ -49,11 +49,14 @@ def iterate_batched(seqs, n_batch_seqs, n_batch_trials):
         max_batch_seq_len = len(batch_seqs[-1])
         
         # iterate over batches of trials now
-        for from_trial_id in range(0, max_batch_seq_len, multiple):
-            to_trial_id = from_trial_id + multiple
+        for from_trial_id in range(0, max_batch_seq_len, n_batch_trials):
+            to_trial_id = from_trial_id + n_batch_trials
 
             # get eligible sequences that haven't finished
-            subseqs = [s[from_trial_id:to_trial_id] for s in batch_seqs if to_trial_id <= len(s)]
+            if pad_to_maximum:
+                subseqs = [s[from_trial_id:to_trial_id] for s in batch_seqs]
+            else:
+                subseqs = [s[from_trial_id:to_trial_id] for s in batch_seqs if to_trial_id <= len(s)]
 
             new_seqs = from_trial_id == 0
             
@@ -92,7 +95,7 @@ def pad_to_max(seqs):
         new_seq = seq[:]
         if to_pad > 0:
             new_seq.extend([None] * to_pad)
-        return new_seqs.append(new_seq)
+        new_seqs.append(new_seq)
     return new_seqs
     
 def make_prev_curr_sequences(seqs):
