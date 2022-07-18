@@ -1,5 +1,9 @@
+#
+#   Bayesian Knowledge Tracing PyTorch Implementation
+#
+
 import numpy as np
-import sklearn.metrics
+import metrics
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,7 +14,7 @@ import pandas as pd
 from collections import defaultdict
 from torch.nn.utils.rnn import pad_sequence
 import copy 
-
+import json
 class MultiHmmCell(jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs, n_chains):
@@ -125,7 +129,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, patience
         #
         ytrue, ypred = predict(model, valid_seqs, n_batch_seqs, device)
 
-        auc_roc = sklearn.metrics.roc_auc_score(ytrue, ypred)
+        auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         print("Train loss: %8.4f, Valid AUC: %0.2f" % (mean_train_loss, auc_roc))
         if auc_roc > best_val_auc_roc:
             best_val_auc_roc = auc_roc
@@ -176,10 +180,10 @@ def predict(model, seqs, n_batch_seqs, device):
         
 
 def main():
-    df = pd.read_csv("data/datasets/gervetetal_statics.csv")
+    df = pd.read_csv("data/datasets/gervetetal_bridge_algebra06.csv")
     seqs = to_student_sequences(df)
     
-    splits = np.load("data/splits/gervetetal_statics.npy")
+    splits = np.load("data/splits/gervetetal_bridge_algebra06.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -200,14 +204,70 @@ def main():
                   n_kcs,
                   device='cuda:0', 
                   learning_rate=0.5, 
-                  epochs=1, 
-                  patience=10,
+                  epochs=20, 
+                  patience=5,
                   n_batch_seqs=500)
 
     ytrue_test, ypred_test = predict(model, test_seqs, 500, 'cuda:0')
-    auc_roc = sklearn.metrics.roc_auc_score(ytrue_test, ypred_test)
+    auc_roc = metrics.roc_auc_score(ytrue_test, ypred_test)
 
     print("Test auc: %0.2f" % (auc_roc))
 
+def main(cfg_path, dataset_name, output_path):
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
+    
+    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    splits = np.load("data/splits/%s.npy" % dataset_name)
+    seqs = to_student_sequences(df)
+    
+    all_ytrue = []
+    all_ypred = []
+
+    results = []
+    for s in range(splits.shape[0]):
+        split = splits[s, :]
+
+        train_ix = split == 2
+        valid_ix = split == 1
+        test_ix = split == 0
+
+        train_df = df[train_ix]
+        valid_df = df[valid_ix]
+        test_df = df[test_ix]
+
+        train_students = set(train_df['student'])
+        valid_students = set(valid_df['student'])
+        test_students = set(test_df['student'])
+        train_seqs = [seqs[s] for s in train_students]
+        valid_seqs = [seqs[s] for s in valid_students]
+        test_seqs = [seqs[s] for s in test_students]
+
+        n_kcs = int(np.max(df['skill']) + 1)
+        model = train(train_seqs, valid_seqs, 
+            n_kcs=n_kcs, 
+            device='cuda:0',
+            **cfg)
+
+        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_batch_seqs'], 'cuda:0')
+        
+        ypred_test = np.exp(log_ypred_test)
+
+        results.append(metrics.calculate_metrics(ytrue_test, ypred_test))
+        all_ytrue.extend(ytrue_test)
+        all_ypred.extend(ypred_test)
+
+    all_ytrue = np.array(all_ytrue)
+    all_ypred = np.array(all_ypred)
+
+    overall_metrics = metrics.calculate_metrics(all_ytrue, all_ypred)
+    results.append(overall_metrics)
+
+    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])] + ['Overall'])
+    print(results_df)
+
+    results_df.to_csv(output_path)
+
 if __name__ == "__main__":
-    main()
+    import sys
+    main(*sys.argv[1:])
