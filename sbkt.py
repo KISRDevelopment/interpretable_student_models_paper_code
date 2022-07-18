@@ -10,7 +10,7 @@ import pandas as pd
 import sklearn.metrics
 import copy 
 import torch.distributions as D
-
+import metrics 
 class BKTCell(jit.ScriptModule):
     def __init__(self, n_kcs, n_obs_kcs, n_abilities):
         super(BKTCell, self).__init__()
@@ -237,7 +237,7 @@ class BKTModel(nn.Module):
     def __init__(self, n_kcs, n_obs_kcs):
         super(BKTModel, self).__init__()
         
-        self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs, 30)
+        self.bktlayer = BKTLayer(BKTCell, n_kcs, n_obs_kcs, 5)
         self._A = None 
 
     def sample_assignment(self, tau):
@@ -269,7 +269,7 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     #scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', threshold=1e-2, threshold_mode='abs', verbose=True)
-    best_val_loss = np.inf 
+    best_val_auc_roc =  0.5
     best_state = None 
     epochs_since_last_best = 0
 
@@ -277,63 +277,70 @@ def train(train_seqs, valid_seqs, n_obs_kcs,
         np.random.shuffle(train_seqs)
         losses = []
 
-        for seqs, new_seqs in sequences.iterate_batched(train_seqs, n_batch_seqs, n_batch_trials):
+        
+        for from_seq in range(0, len(train_seqs), n_batch_seqs):
+            to_seq = from_seq + n_batch_seqs
+            batch_seqs = train_seqs[from_seq:to_seq]
+            batch_seqs = sequences.pad_to_max(batch_seqs)
+            batch_seqs = sequences.make_prev_curr_sequences(batch_seqs)
 
-            curr_skill, curr_correct, mask, _ = transform(seqs)
-            prev_skill, prev_correct, _, _ = transform(seqs, prev_trial=True)
-            
-            if new_seqs:
+            n_seqs = len(batch_seqs)
+            n_trials = len(batch_seqs[0])
+
+            batch_logits = th.zeros((n_seqs, n_trials)).cuda()
+            batch_label = th.zeros((n_seqs, n_trials)).cuda()
+            batch_mask = th.zeros((n_seqs, n_trials)).cuda()
+
+            for i in range(0, n_trials, n_batch_trials):
+                to_trial = i + n_batch_trials
+                block = [s[i:to_trial] for s in batch_seqs]
+                
+                curr_skill, curr_correct, mask, _ = transform(block)
+                prev_skill, prev_correct, _, _ = transform(block, prev_trial=True)
+
                 prev_skill = prev_skill.to(device)
                 curr_skill = curr_skill.to(device)
                 prev_correct = prev_correct.to(device)
 
-                model.sample_assignment(tau)
-                probs, full_state = model(prev_skill, curr_skill, prev_correct)
-            else:
-                
-                state, ability_state, pc_given_alpha  = full_state
-                state = state.detach()
-                ability_state = ability_state.detach()
-                pc_given_alpha = pc_given_alpha.detach()
-
-                # trim the state
-                n_state_size = state.shape[0]
-                n_diff = n_state_size - len(seqs)
-                if n_diff > 0:
-                    state = state[n_diff:,:]
-                    ability_state = ability_state[n_diff:,:]
-                    pc_given_alpha = pc_given_alpha[n_diff:,:]
-
-                prev_skill = prev_skill.to(device)
-                curr_skill = curr_skill.to(device)
-                prev_correct = prev_correct.to(device)
-                
-                model.sample_assignment(tau)
-                probs, full_state = model.forward_from_state(prev_skill, curr_skill, prev_correct, (state, ability_state, pc_given_alpha))
+                if i == 0:
+                    model.sample_assignment(tau)
+                    probs, full_state = model(prev_skill, curr_skill, prev_correct)
+                else:
+                    state, ability_state, pc_given_alpha  = full_state
+                    state = state.detach()
+                    ability_state = ability_state.detach()
+                    pc_given_alpha = pc_given_alpha.detach()
+                    probs, full_state = model.forward_from_state(prev_skill, curr_skill, prev_correct, (state, ability_state, pc_given_alpha))
             
-            curr_correct = curr_correct.to(device)
-            mask = mask.to(device)
-            loss = loss_fn(probs, curr_correct)
-            loss = loss * mask
-            loss = loss.sum() / mask.sum()
+                batch_logits[:, i:to_trial] = th.log(probs / (1-probs))  # A quick HACK for now
+                batch_label[:, i:to_trial] = curr_correct
+                batch_mask[:, i:to_trial] = mask 
+        
+            batch_logits = batch_logits.view(-1).cpu()
+            batch_label = batch_label.view(-1).cpu()
+            batch_mask = batch_mask.view(-1).bool().cpu()
 
-            losses.append(loss.item())
-            
+            batch_logits = batch_logits[batch_mask]
+            batch_label = batch_label[batch_mask]
+
+            loss_fn = nn.BCEWithLogitsLoss()
+            loss = loss_fn(batch_logits, batch_label)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
-        valid_loss = evaluate(model, valid_seqs, device=device, n_samples=n_valid_samples, n_batch_seqs=n_batch_seqs*2, n_batch_trials=n_batch_trials)
-        print("%d Train loss: %0.4f, Valid loss: %0.4f" % (e, np.mean(losses), valid_loss))
 
-        epochs_since_last_best += 1
+            losses.append(loss.item())
 
-        if valid_loss < best_val_loss:
-            best_val_loss = valid_loss
+        r = evaluate(model, valid_seqs, device=device, n_samples=n_valid_samples, n_batch_seqs=n_batch_seqs*2, n_batch_trials=n_batch_trials)
+        print("%d Train loss: %0.4f, Valid auc: %0.4f" % (e, np.mean(losses), r['auc_roc']))
+
+        if r['auc_roc'] > best_val_auc_roc:
+            best_val_auc_roc = r['auc_roc']
             best_state = copy.deepcopy(model.state_dict())
             epochs_since_last_best = 0
-        
-        #scheduler.step(valid_loss)
+        else:
+            epochs_since_last_best += 1
 
         if epochs_since_last_best >= patience:
             break
@@ -360,6 +367,7 @@ def evaluate(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu'
     with th.no_grad():
         losses = []
 
+        all_probs = []
         for e in range(n_samples):
             
             model.sample_assignment(tau=1e-6)
@@ -367,38 +375,33 @@ def evaluate(model, test_seqs, n_batch_seqs=50, n_batch_trials=100, device='cpu'
             loss = -np.mean(curr_correct * np.log(probs) + (1-curr_correct) * np.log(1-probs))
 
             losses.append(loss)
+            all_probs.append(probs)
+        
+        mean_prob = np.mean(all_probs, axis=0)
+        r = metrics.calculate_metrics(curr_correct, mean_prob)
+
     model.train()
 
-    return np.mean(losses)
+    return r
 
 def _predict(model, seqs, n_batch_seqs, n_batch_trials, device):
     all_probs = []
     all_labels = []
 
-    for seqs, new_seqs in sequences.iterate_batched(seqs, n_batch_seqs, n_batch_trials):
-        curr_skill, curr_correct, mask, trial_index = transform(seqs)
-        prev_skill, prev_correct, _, _ = transform(seqs, prev_trial=True)
+    for batch_seqs, new_seqs in sequences.iterate_batched(seqs, n_batch_seqs, n_batch_trials, pad_to_maximum=True):
+        curr_skill, curr_correct, mask, trial_index = transform(batch_seqs)
+        prev_skill, prev_correct, _, _ = transform(batch_seqs, prev_trial=True)
                 
         if new_seqs:
             prev_skill = prev_skill.to(device)
             curr_skill = curr_skill.to(device)
             prev_correct = prev_correct.to(device)
-
             probs, full_state = model(prev_skill, curr_skill, prev_correct)
         else:
             state, ability_state, pc_given_alpha  = full_state
-            # trim the state
-            n_state_size = state.shape[0]
-            n_diff = n_state_size - len(seqs)
-            if n_diff > 0:
-                state = state[n_diff:,:]
-                ability_state = ability_state[n_diff:,:]
-                pc_given_alpha = pc_given_alpha[n_diff:,:]
-
             prev_skill = prev_skill.to(device)
             curr_skill = curr_skill.to(device)
             prev_correct = prev_correct.to(device)
-            
             probs, full_state = model.forward_from_state(prev_skill, curr_skill, prev_correct, (state, ability_state, pc_given_alpha))
         
         probs = probs.cpu()
@@ -446,9 +449,9 @@ def transform(subseqs, prev_trial=False):
     return th.tensor(skill), th.tensor(correct).float(), th.tensor(included).float(), trial_index
 
 def main():
-    df = pd.read_csv("data/datasets/synthetic.csv")
+    df = pd.read_csv("data/datasets/gervetetal_statics.csv")
     #df['skill'] = df['core_skill']
-    splits = np.load("data/splits/synthetic.npy")
+    splits = np.load("data/splits/gervetetal_statics.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -469,11 +472,11 @@ def main():
     model = train(train_seqs, valid_seqs, n_obs_kcs, 
         n_kcs=10, 
         device='cpu', 
-        learning_rate=0.1, 
-        epochs=100, 
+        learning_rate=0.5, 
+        epochs=1000, 
         tau=0.5, 
         patience=10,
-        n_batch_seqs=200, 
+        n_batch_seqs=50, 
         n_batch_trials=50)
 
     test_students = set(test_df['student'])

@@ -64,10 +64,6 @@ def train(train_seqs, valid_seqs, n_kcs,
 
         model.train()
 
-        all_logits = []
-        all_y = []
-        all_mask = []
-
         for from_seq in range(0, len(train_seqs), n_batch_seqs):
             to_seq = from_seq + n_batch_seqs
             batch_seqs = train_seqs[from_seq:to_seq]
