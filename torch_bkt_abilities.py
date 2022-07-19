@@ -66,36 +66,31 @@ class MultiHmmCell(jit.ScriptModule):
         
         return outputs
 
-
-class BktModel(nn.Module):
-    def __init__(self, n_kcs, n_abilities):
-        super(BktModel, self).__init__()
-
+class AbilityLayer(jit.ScriptModule):
+    
+    def __init__(self, n_abilities):
+        super(AbilityLayer, self).__init__()
         abilities = th.linspace(-3, 3, n_abilities).to('cuda:0')
         abilities = th.vstack((-abilities, abilities))
-
-        self.hmms = nn.ModuleList()
-        for i in range(abilities.shape[1]):
-            obs_logit_offset = abilities[:,i] 
-            self.hmms.append(MultiHmmCell(2, 2, n_kcs, obs_logit_offset))
-        
         self.n_abilities = n_abilities
         self.abilities = abilities
+    
+    @jit.script_method
+    def forward(self, corr: Tensor, log_py_given_ability: Tensor) -> Tensor:
+        """
+            corr: [n_batch, t]
+            log_py_given_ability: # [n_abilities, n_batch, t, n_obs]
+        """
 
-    def forward(self, corr, kc):
-        log_py_given_ability = []
-        for hmm in self.hmms:
-            log_py_given_ability.append(hmm(corr, kc))
-
-        # [n_abilities, n_batch, t, n_obs]
-        log_py_given_ability = th.stack(log_py_given_ability)
-
+        _,n_batch,n_trials,_ = log_py_given_ability.shape
+        
         # [n_abilities, n_batch]
         # uniform prior over abilities log(a) = log(1/n_abilities)
-        log_ability = th.zeros((self.n_abilities, corr.shape[0])).to('cuda:0') - np.log(self.n_abilities)
-
-        log_pys = []
-        for i in range(corr.shape[1]):
+        log_ability = th.zeros((self.n_abilities, n_batch)) - th.log(th.tensor([self.n_abilities]))
+        log_ability = log_ability.to('cuda:0')
+        log_pys = th.jit.annotate(List[Tensor], [])
+        
+        for i in range(n_trials):
             # [n_batch, n_obs]
             log_py = th.logsumexp(log_ability[:,:,None] + log_py_given_ability[:,:,i,:], dim=0)
             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
@@ -108,8 +103,28 @@ class BktModel(nn.Module):
         
         outputs = th.stack(log_pys)
         outputs = th.transpose(outputs, 0, 1)
-        
+
         return outputs
+
+class BktModel(nn.Module):
+    def __init__(self, n_kcs, n_abilities):
+        super(BktModel, self).__init__()
+
+        self.al = AbilityLayer(n_abilities)
+        self.hmms = nn.ModuleList()
+        for i in range(n_abilities):
+            obs_logit_offset = self.al.abilities[:,i] 
+            self.hmms.append(MultiHmmCell(2, 2, n_kcs, obs_logit_offset))
+        
+
+    def forward(self, corr, kc):
+        log_py_given_ability = []
+        for hmm in self.hmms:
+            log_py_given_ability.append(hmm(corr, kc))
+
+        # [n_abilities, n_batch, t, n_obs]
+        log_py_given_ability = th.stack(log_py_given_ability)
+        return self.al(corr, log_py_given_ability)
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
