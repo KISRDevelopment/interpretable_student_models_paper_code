@@ -14,7 +14,7 @@ import copy
 import json
 class MultiHmmCell(jit.ScriptModule):
     
-    def __init__(self, n_states, n_outputs, n_chains, obs_logit_offset):
+    def __init__(self, n_states, n_outputs, n_chains, abilities):
         super(MultiHmmCell, self).__init__()
         
         self.n_states = n_states
@@ -24,7 +24,7 @@ class MultiHmmCell(jit.ScriptModule):
         self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
         self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
         self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
-        self.obs_logit_offset = obs_logit_offset # [n_obs]
+        self.abilities = abilities # [n_obs, n_abilities]
 
     @jit.script_method
     def forward(self, obs: Tensor, chain: Tensor) -> Tensor:
@@ -40,31 +40,50 @@ class MultiHmmCell(jit.ScriptModule):
         batch_idx = th.arange(n_batch)
 
         log_alpha = F.log_softmax(self.init_logits, dim=1) # n_chains x n_states
-        log_obs = F.log_softmax(self.obs_logits + self.obs_logit_offset[None,None,:], dim=2) # n_chains x n_states x n_obs
+        log_obs = F.log_softmax(self.obs_logits[:,:,:,None] + self.abilities[None,None,:,:], dim=2) # n_chains x n_states x n_obs x n_abilities
         log_t = F.log_softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
         
-        # [n_batch, n_chains, n_states]
+        # [n_batch, n_chains, n_states, n_abilities]
         log_alpha = th.tile(log_alpha, (n_batch, 1, 1))
+        n_abilities = self.abilities.shape[1]
+        log_alpha = th.tile(log_alpha, (n_abilities, 1, 1, 1))
+        log_alpha = th.permute(log_alpha, [1, 2, 3, 0])
+
+        log_ability = th.zeros((n_batch, n_abilities)) - th.log(th.tensor([n_abilities])) # [n_batch, n_abilities]
+        log_ability = log_ability.to('cuda:0')
         for i in range(0, obs.shape[1]):
             curr_chain = chain[:,i] # [n_batch]
             
             # predict
-            # B X S X O + B X S X 1
-            log_py = th.logsumexp(log_obs[curr_chain,:,:] + log_alpha[batch_idx, curr_chain, :, None], dim=1)  #[n_batch, n_obs]
+            # input = B X S X O X A + B X S X 1 X A, output = B X O X A
+            #print(log_obs[curr_chain,:,:,:].shape, log_alpha[batch_idx, curr_chain, :, None,:].shape)
+            log_py_given_beta = th.logsumexp(log_obs[curr_chain,:,:,:] + log_alpha[batch_idx, curr_chain, :, None,:], dim=1)
+            log_py_given_beta = log_py_given_beta - th.logsumexp(log_py_given_beta, dim=1)[:,None,:]
+            
+            curr_y = obs[:,i]
+            log_py = log_obs[curr_chain, :, curr_y, :] # [n_batch, n_states, n_abilities]
+            # B x 1 X S X A + B x 1 x S X A + B x S x S X 1 = B X S X S X A
+            #print(log_py[:,None,:,:].shape, log_alpha[batch_idx,curr_chain,None,:,:].shape, log_t[curr_chain,:,:,None].shape)
+            log_alpha[batch_idx, curr_chain, :,:] = th.logsumexp(log_py[:,None,:,:] + 
+                log_alpha[batch_idx,curr_chain,None,:,:] + 
+                log_t[curr_chain,:,:,None], dim=2)
+
+            # input = B X 1 X A + B X O X A, output = B X O
+            log_py = th.logsumexp(log_ability[:,None,:] + log_py_given_beta, dim=2)
             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
             outputs += [log_py]
 
-            # update
-            curr_y = obs[:,i]
-            log_py = log_obs[curr_chain, :, curr_y] # [n_batch, n_states]
+            # update given actual observation
+            log_actual_given_beta = log_py_given_beta[batch_idx, curr_y, :] # [n_batch, n_abilities]
+            log_ability = log_ability + log_actual_given_beta
             
-            # B x 1 X S + B x 1 x S + B x S x S
-            log_alpha[batch_idx, curr_chain, :] = th.logsumexp(log_py[:,None,:] + log_alpha[batch_idx,curr_chain,None,:] + log_t[curr_chain,:,:], dim=2)
-        
+            
+            
         outputs = th.stack(outputs)
         outputs = th.transpose(outputs, 0, 1)
         
         return outputs
+
 
 class AbilityLayer(jit.ScriptModule):
     
@@ -105,26 +124,16 @@ class AbilityLayer(jit.ScriptModule):
         outputs = th.transpose(outputs, 0, 1)
 
         return outputs
-
 class BktModel(nn.Module):
-    def __init__(self, n_kcs, n_abilities):
+    def __init__(self, n_kcs, n_abilities, min_ability, max_ability):
         super(BktModel, self).__init__()
 
-        self.al = AbilityLayer(n_abilities)
-        self.hmms = nn.ModuleList()
-        for i in range(n_abilities):
-            obs_logit_offset = self.al.abilities[:,i] 
-            self.hmms.append(MultiHmmCell(2, 2, n_kcs, obs_logit_offset))
-        
+        abilities = th.linspace(min_ability, max_ability, n_abilities).to('cuda:0')
+        abilities = th.vstack((-abilities, abilities))
+        self.hmm = MultiHmmCell(2, 2, n_kcs, abilities)
 
     def forward(self, corr, kc):
-        log_py_given_ability = []
-        for hmm in self.hmms:
-            log_py_given_ability.append(hmm(corr, kc))
-
-        # [n_abilities, n_batch, t, n_obs]
-        log_py_given_ability = th.stack(log_py_given_ability)
-        return self.al(corr, log_py_given_ability)
+        return self.hmm(corr, kc)
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -136,9 +145,9 @@ def to_student_sequences(df):
         seqs[r.student]["kc"].append(r.skill)
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, patience, n_batch_seqs):
+def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, patience, n_batch_seqs, n_abilities, min_ability, max_ability):
 
-    model = BktModel(n_kcs, 5)
+    model = BktModel(n_kcs, n_abilities, min_ability, max_ability)
     model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
@@ -229,10 +238,10 @@ def predict(model, seqs, n_batch_seqs, device):
         
 
 def main():
-    df = pd.read_csv("data/datasets/gervetetal_assistments09.csv")
+    df = pd.read_csv("data/datasets/synthetic.csv")
     seqs = to_student_sequences(df)
     
-    splits = np.load("data/splits/gervetetal_assistments09.npy")
+    splits = np.load("data/splits/synthetic.npy")
     split = splits[1, :]
 
     train_ix = split == 2
@@ -255,14 +264,17 @@ def main():
                   learning_rate=0.5, 
                   epochs=20, 
                   patience=5,
-                  n_batch_seqs=500)
+                  n_batch_seqs=500,
+                  n_abilities=50,
+                  min_ability=-3,
+                  max_ability=3)
 
     ytrue_test, ypred_test = predict(model, test_seqs, 500, 'cuda:0')
     auc_roc = metrics.calculate_metrics(ytrue_test, ypred_test)['auc_roc']
 
     print("Test auc: %0.2f" % (auc_roc))
 
-def main2(cfg_path, dataset_name, output_path):
+def main(cfg_path, dataset_name, output_path):
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
     
