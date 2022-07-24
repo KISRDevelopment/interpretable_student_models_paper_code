@@ -7,9 +7,9 @@ datasets = [os.path.basename(p).replace('.csv','') for p in glob.glob("data/data
 # model_script = "torch_bkt.py"
 # cfg_name = "bkt"
 
-cfg_path = "cfgs/bkt-abilities-pytorch.json"
-model_script = "torch_bkt_abilities.py"
-cfg_name = "bkt-abilities"
+cfg_path = "cfgs/bkt-pytorch.json"
+model_script = "torch_bkt_problems.py"
+cfg_name = "bkt-problems"
 
 for dataset in datasets:
     if os.path.exists("data/results-pytorch/%s_%s.csv"%(cfg_name, dataset)):

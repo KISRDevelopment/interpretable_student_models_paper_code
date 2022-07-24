@@ -25,7 +25,12 @@ class MultiHmmCell(jit.ScriptModule):
         
         # [n_hidden,n_hidden] (Target,Source)
         self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
-        self.obs_logits = nn.Parameter(th.randn(n_problems, n_states, n_outputs))
+
+        # we initialize to zeros so that the model puts more emphasis on kc logits
+        # and so unseen problems have zero logit
+        self.obs_logits_problem = nn.Parameter(th.zeros(n_problems, n_states, n_outputs))
+        self.obs_logits_kc = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
+
         self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
         
     @jit.script_method
@@ -44,7 +49,6 @@ class MultiHmmCell(jit.ScriptModule):
         batch_idx = th.arange(n_batch)
 
         log_alpha = F.log_softmax(self.init_logits, dim=1) # n_chains x n_states
-        log_obs = F.log_softmax(self.obs_logits, dim=2) # n_problems x n_states x n_obs
         log_t = F.log_softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
         
         # [n_batch, n_chains, n_states]
@@ -53,15 +57,19 @@ class MultiHmmCell(jit.ScriptModule):
             curr_chain = chain[:,i] # [n_batch]
             curr_problem = problem[:,i] #n_batch
 
+            # B X S X O
+            logit = self.obs_logits_problem[curr_problem,:,:] + self.obs_logits_kc[curr_chain,:,:]
+            log_obs = F.log_softmax(logit, dim=2)
+
             # predict
             # B X S X O + B X S X 1
-            log_py = th.logsumexp(log_obs[curr_problem,:,:] + log_alpha[batch_idx, curr_chain, :, None], dim=1)  #[n_batch, n_obs]
+            log_py = th.logsumexp(log_obs + log_alpha[batch_idx, curr_chain, :, None], dim=1)  #[n_batch, n_obs]
             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
             outputs += [log_py]
 
             # update
             curr_y = obs[:,i]
-            log_py = log_obs[curr_problem, :, curr_y] # [n_batch, n_states]
+            log_py = log_obs[batch_idx, :, curr_y] # [n_batch, n_states]
             
             # B x 1 X S + B x 1 x S + B x S x S
             log_alpha[batch_idx, curr_chain, :] = th.logsumexp(log_py[:,None,:] + log_alpha[batch_idx,curr_chain,None,:] + log_t[curr_chain,:,:], dim=2)
@@ -189,7 +197,7 @@ def predict(model, seqs, n_batch_seqs, device):
         
 
 def main():
-    df = pd.read_csv("data/datasets/gervetetal_algebra05.csv")
+    df = pd.read_csv("data/datasets/gervetetal_statics.csv")
     n_problems = df['problem'].max() + 1
     print("Problems: %d" % n_problems)
     gdf = df.groupby('problem')['student'].count()
@@ -198,7 +206,7 @@ def main():
     
     seqs = to_student_sequences(df)
     
-    splits = np.load("data/splits/gervetetal_algebra05.npy")
+    splits = np.load("data/splits/gervetetal_statics.npy")
     split = splits[0, :]
 
     train_ix = split == 2
@@ -212,7 +220,7 @@ def main():
     train_problems = set(df[train_ix]['problem'])
     test_problems = set(df[test_ix]['problem'])
     print("Problems in test but not in train: %d" % len(test_problems - train_problems))
-    exit()
+    
     train_seqs = [seqs[s] for s in train_students]
     valid_seqs = [seqs[s] for s in valid_students]
     test_seqs = [seqs[s] for s in test_students]
@@ -233,11 +241,13 @@ def main():
 
     print("Test auc: %0.2f" % (auc_roc))
 
-def main2(cfg_path, dataset_name, output_path):
+def main(cfg_path, dataset_name, output_path):
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    n_problems = df['problem'].max() + 1
+
     splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
@@ -266,6 +276,7 @@ def main2(cfg_path, dataset_name, output_path):
         n_kcs = int(np.max(df['skill']) + 1)
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
+            n_problems=n_problems,
             device='cuda:0',
             **cfg)
 
