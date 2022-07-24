@@ -3,7 +3,7 @@
     "epochs" : 100, 
     "patience" : 10,
     "n_batch_seqs" : 500,
-    "n_abilities" : 50,
+    "n_abilities" : 5,
     "min_ability" : -3,
     "max_ability" : 3
 }

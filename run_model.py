@@ -12,5 +12,8 @@ model_script = "torch_bkt_abilities.py"
 cfg_name = "bkt-abilities"
 
 for dataset in datasets:
+    if os.path.exists("data/results-pytorch/%s_%s.csv"%(cfg_name, dataset)):
+        continue
+    
     print(dataset)
-    subprocess.call(['python', model_script, cfg_path, dataset, "data/results-pytorch/%s_%s.json"%(cfg_name, dataset)])
+    subprocess.call(['python', model_script, cfg_path, dataset, "data/results-pytorch/%s_%s.csv"%(cfg_name, dataset)])
