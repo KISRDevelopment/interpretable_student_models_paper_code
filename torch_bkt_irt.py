@@ -292,11 +292,13 @@ def main():
 
     print("Test auc: %0.2f" % (auc_roc))
 
-def main2(cfg_path, dataset_name, output_path):
+def main(cfg_path, dataset_name, output_path):
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    n_problems = np.max(df['problem']) + 1
+
     splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
@@ -325,6 +327,7 @@ def main2(cfg_path, dataset_name, output_path):
         n_kcs = int(np.max(df['skill']) + 1)
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
+            n_problems=n_problems,
             device='cuda:0',
             **cfg)
 

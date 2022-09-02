@@ -15,6 +15,10 @@ cfg_path = "cfgs/dkt-pytorch.json"
 model_script = "dkt.py"
 cfg_name = "dkt"
 
+# cfg_path = "cfgs/bkt-abilities-pytorch.json"
+# model_script = "torch_bkt_irt.py"
+# cfg_name = "bkt-irt"
+
 for dataset in datasets:
     if os.path.exists("data/results-pytorch/%s_%s.csv"%(cfg_name, dataset)):
         continue
