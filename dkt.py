@@ -123,7 +123,7 @@ def train(train_seqs, valid_seqs, n_kcs,
 
         with th.no_grad():
 
-            ytrue_valid, logit_ypred_valid = predict(model, valid_seqs)
+            ytrue_valid, logit_ypred_valid = predict(model, valid_seqs, n_batch_trials=n_batch_trials*10)
             if balanced_loss:
                 pos_weight = th.tensor([(ytrue_valid==0).sum()/(ytrue_valid==1).sum()])
             else:
