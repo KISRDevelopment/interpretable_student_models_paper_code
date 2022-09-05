@@ -7,7 +7,7 @@ import os
 
 def main(path):
 
-    reported_df = load_reported_results(['DKT-Items'])
+    reported_df = load_reported_results(['Best-LR','DKT-Items'])
 
     df = load_results(path)
     df.sort_values('model', inplace=True)
@@ -41,7 +41,7 @@ def load_reported_results(selected_models, n_splits=5):
     
     return df
 
-def plot_results(ax, df, col, ylabel, title, ylim=None, show_xtick_labels=False):
+def plot_results(ax, df, col, ylabel, title, ylim=None, show_xtick_labels=False, ytick_interval=0.025):
 
     gdf = df.groupby('model', sort=False)
 
@@ -67,6 +67,14 @@ def plot_results(ax, df, col, ylabel, title, ylim=None, show_xtick_labels=False)
     if not show_xtick_labels:
         ax.set_xticks([])
     ax.set_ylim(ylim)
+
+    actual_yticks = ax.get_yticks()
+    yticks = [actual_yticks[0]]
+    while len(yticks) < 10:
+        yticks.append(yticks[-1] + ytick_interval)
+    yticks = np.round(yticks, 3)
+    ax.set_yticks(yticks)
+    
     ax.set_title(title, fontsize=28)
 
 def load_results(path):
