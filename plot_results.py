@@ -7,6 +7,8 @@ import os
 
 def main(path):
 
+    reported_df = load_reported_results(['IRT', 'Best-LR'])
+
     df = load_results(path)
     df.sort_values('model', inplace=True)
 
@@ -19,9 +21,25 @@ def main(path):
         dataset = datasets[i]
         ix = (df['dataset'] == dataset) & (df['split'] != 'Overall')
         sdf = df[ix]
+        
+        sdf = pd.concat((sdf, reported_df[reported_df['dataset']==dataset]), axis=0, ignore_index=True)
         plot_results(ax, sdf, 'auc_roc', '', dataset, show_xtick_labels=(i//n_cols) > 0)
     f.subplots_adjust(wspace=0.3, hspace=0.2)
     plt.savefig("tmp/results.png", bbox_inches='tight', dpi=120)
+
+def load_reported_results(selected_models, n_splits=5):
+    df = pd.read_csv("reported_results_gervetetal.csv")
+    df = df[df['model'].isin(selected_models)]
+    df = pd.melt(df, id_vars='model', value_vars=df.columns[1:], var_name='dataset', value_name='auc_roc')
+    dfs = []
+    for s in range(n_splits):
+        sdf = df.copy()
+        sdf['split'] = 'Split %d' % s
+        dfs.append(sdf)
+    
+    df = pd.concat(dfs, axis=0, ignore_index=True)
+    
+    return df
 
 def plot_results(ax, df, col, ylabel, title, ylim=None, show_xtick_labels=False):
 
