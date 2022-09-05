@@ -112,14 +112,14 @@ def add_features(corr, kc, n_kcs):
 
     # BxTxn_kcs
     corr_by_kc = (kc_one_hot * corr[:,:,None]).cumsum(1)
-    attempts_by_kc = kc_one_hot.cumsum(1)
-
-    mean_corr_by_kc = corr_by_kc / (1+attempts_by_kc)
-    log_attempts_by_kc = (1+attempts_by_kc).log()
+    incorr_by_kc = (kc_one_hot * (1-corr[:,:,None])).cumsum(1)
+    
+    log_corr_by_kc = (1+corr_by_kc).log()
+    log_incorr_by_kc = (1+incorr_by_kc).log()
 
     features = th.zeros((n_batch, n_trials, 2 * n_kcs))
-    features[:,1:,:n_kcs] = mean_corr_by_kc[:,:-1,:]
-    features[:,1:,n_kcs:] = log_attempts_by_kc[:,:-1,:]
+    features[:,1:,:n_kcs] = log_corr_by_kc[:,:-1,:]
+    features[:,1:,n_kcs:] = log_incorr_by_kc[:,:-1,:]
 
     return features
 
