@@ -7,7 +7,7 @@ import os
 
 def main(path):
 
-    reported_df = load_reported_results(['IRT', 'Best-LR'])
+    reported_df = load_reported_results(['DKT-Items'])
 
     df = load_results(path)
     df.sort_values('model', inplace=True)
