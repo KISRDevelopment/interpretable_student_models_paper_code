@@ -17,7 +17,7 @@ import copy
 import json
 class MultiHmmCell(jit.ScriptModule):
     
-    def __init__(self, n_states, n_outputs, n_chains, n_features):
+    def __init__(self, n_states, n_outputs, n_chains):
         super(MultiHmmCell, self).__init__()
         
         self.n_states = n_states
@@ -27,14 +27,13 @@ class MultiHmmCell(jit.ScriptModule):
         self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
         self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
         self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
-        self.lr = nn.Linear(n_features, n_outputs)
-
+        
     @jit.script_method
-    def forward(self, obs: Tensor, chain: Tensor, F: Tensor) -> Tensor:
+    def forward(self, obs: Tensor, chain: Tensor, obs_logits_fv: Tensor) -> Tensor:
         """
             obs: [n_batch, t]
             chain: [n_batch, t]
-            F: [n_batch, t, n_features]
+            obs_logits_fv: [n_batch, t, n_states, n_obs]
             output:
             [n_batch, t, n_outputs]
         """
@@ -44,7 +43,8 @@ class MultiHmmCell(jit.ScriptModule):
         batch_idx = th.arange(n_batch)
 
         log_alpha = F.log_softmax(self.init_logits, dim=1) # n_chains x n_states
-        log_obs = F.log_softmax(self.obs_logits + self.lr(F), dim=2) # n_chains x n_states x n_obs
+        
+        log_obs = F.log_softmax(self.obs_logits, dim=2) # n_chains x n_states x n_obs
         log_t = F.log_softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
         
         # [n_batch, n_chains, n_states]
@@ -54,13 +54,15 @@ class MultiHmmCell(jit.ScriptModule):
             
             # predict
             # B X S X O + B X S X 1
-            log_py = th.logsumexp(log_obs[curr_chain,:,:] + log_alpha[batch_idx, curr_chain, :, None], dim=1)  #[n_batch, n_obs]
+            obs_logit = self.obs_logits[curr_chain, :, :] + obs_logits_fv[:,i,:,:]
+            log_obs = F.log_softmax(obs_logit, dim=2)
+            log_py = th.logsumexp(log_obs + log_alpha[batch_idx, curr_chain, :, None], dim=1)  #[n_batch, n_obs]
             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
             outputs += [log_py]
 
             # update
             curr_y = obs[:,i]
-            log_py = log_obs[curr_chain, :, curr_y] # [n_batch, n_states]
+            log_py = log_obs[batch_idx, :, curr_y] # [n_batch, n_states]
             
             # B x 1 X S + B x 1 x S + B x S x S
             log_alpha[batch_idx, curr_chain, :] = th.logsumexp(log_py[:,None,:] + log_alpha[batch_idx,curr_chain,None,:] + log_t[curr_chain,:,:], dim=2)
@@ -74,10 +76,14 @@ class MultiHmmCell(jit.ScriptModule):
 class BktModel(nn.Module):
     def __init__(self, n_kcs):
         super(BktModel, self).__init__()
+
+        self.lr = nn.Linear(2*n_kcs, 2)
         self.hmm = MultiHmmCell(2, 2, n_kcs)
 
-    def forward(self, corr, kc, F):
-        return self.hmm(corr, kc, F)
+    def forward(self, corr, kc, FM):
+        obs_logits_fv = self.lr(FM)[:,:,:,None] # n_batch x n_trials x n_states x 1
+        obs_logits_fv = th.concat((obs_logits_fv,-obs_logits_fv), dim=3)
+        return self.hmm(corr, kc, obs_logits_fv)
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -159,7 +165,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, patience
         #
         # Validation
         #
-        ytrue, ypred = predict(model, valid_seqs, n_batch_seqs, device)
+        ytrue, ypred = predict(model, valid_seqs, n_kcs, n_batch_seqs, device)
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         print("Train loss: %8.4f, Valid AUC: %0.2f" % (mean_train_loss, auc_roc))
@@ -178,7 +184,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, patience
     return model
     
 
-def predict(model, seqs, n_batch_seqs, device):
+def predict(model, seqs, n_kcs, n_batch_seqs, device):
     model.eval()
     with th.no_grad():
         all_ypred = []
@@ -191,7 +197,9 @@ def predict(model, seqs, n_batch_seqs, device):
             batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
 
-            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
+            batch_features = add_features(batch_obs_seqs, batch_kc_seqs, n_kcs)
+            
+            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device), batch_features.to(device)).cpu()
                 
             ypred = output[:, :, 1].flatten()
             ytrue = batch_obs_seqs.flatten()
@@ -240,7 +248,7 @@ def main():
                   patience=5,
                   n_batch_seqs=500)
 
-    ytrue_test, ypred_test = predict(model, test_seqs, 500, 'cuda:0')
+    ytrue_test, ypred_test = predict(model, test_seqs, n_kcs, 500, 'cuda:0')
     auc_roc = metrics.calculate_metrics(ytrue_test, ypred_test)['auc_roc']
 
     print("Test auc: %0.2f" % (auc_roc))
@@ -281,7 +289,7 @@ def main(cfg_path, dataset_name, output_path):
             device='cuda:0',
             **cfg)
 
-        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_batch_seqs'], 'cuda:0')
+        ytrue_test, log_ypred_test = predict(model, test_seqs,n_kcs, cfg['n_batch_seqs'], 'cuda:0')
         
         ypred_test = np.exp(log_ypred_test)
 
