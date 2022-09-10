@@ -1,8 +1,9 @@
 {
-    "learning_rate" : 0.5, 
+    "learning_rate" : 0.01, 
     "epochs" : 100, 
     "patience" : 10,
     "n_batch_seqs" : 100,
     "n_hidden" : 20,
-    "with_features" : false
+    "with_features" : true,
+    "problem_ids" : false
 }

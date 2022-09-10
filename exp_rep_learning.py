@@ -208,11 +208,15 @@ def main(cfg_path, dataset_name, output_path):
 
     
     d = np.load("tmp/mnist.npz")
-
+    y = th.tensor(d['y']).long()
     problem_features = th.tensor(d['data']).float() / 255.0
     if not cfg['with_features']:
         problem_features = problem_features * 0
     
+    if cfg['with_features'] and cfg['problem_ids']:
+        problem_features = F.one_hot(y)
+        print(problem_features.shape)
+
     all_ytrue = []
     all_ypred = []
 
