@@ -4,16 +4,19 @@ import json
 
 def main():
 
-    ns_one_dim = [0,1,2,3,4]
-    ns_two_dim = [0,1,2,3]
-    reps = 1000
+    n_rows = 16
+    n_cols = 16
+    ns_one_dim = np.arange(n_cols)
+    ns_two_dim = np.arange(n_rows)
+    
+    reps = 10
 
     all_rules = set()
     for n_one_dim in ns_one_dim:
         for n_two_dim in ns_two_dim:
             
             for r in range(reps):
-                rules, bool_mat = generate(4, 4, n_one_dim, n_two_dim)
+                rules, bool_mat = generate(n_rows, n_cols, n_one_dim, n_two_dim)
                 
                 d1 = calculate_difficulty(rules)
                 neg_rules = sparsify(1-bool_mat)
