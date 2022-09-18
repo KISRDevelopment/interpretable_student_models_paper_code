@@ -5,12 +5,12 @@ from collections import defaultdict
 import split_dataset
 
 def main():
-    rng.seed(41)
+    rng.seed(6456)
 
-    d = np.load("tmp/mnist.npz")
-    y = d['y'].astype(int)
-
-    unique_labels = np.unique(y)
+    d = np.load("tmp/features_grid.npz")
+    data = d['data']
+    difficulties = (d['difficulties'] - np.min(d['difficulties'])) / (np.max(d['difficulties']) - np.min(d['difficulties']))
+    offsets = 3 - 6 * difficulties
 
     n_students = 1000
     n_trials_per_student = 50
@@ -20,9 +20,6 @@ def main():
     offset_correct_h0 = -1
     offset_correct_h1 = 1
 
-    offset_by_label = dict(zip(unique_labels, rng.normal(0, 1, len(unique_labels)) * 2))
-    print(offset_by_label)
-
     # generate trials
     cols = defaultdict(list)
     for s in range(n_students):
@@ -31,16 +28,16 @@ def main():
         state = rng.binomial(1, p_initial)
 
         # generate an ordering of problems
-        problem_instance_seq = rng.permutation(y.shape[0])
-        problems = y[problem_instance_seq]
+        problem_instance_seq = rng.permutation(data.shape[0])
+        problem_offsets = offsets[problem_instance_seq]
         
         for t in range(n_trials_per_student):
             # get p(correct|state)
 
             if state == 1:
-                logit_pC = offset_correct_h1 + offset_by_label[problems[t]]
+                logit_pC = offset_correct_h1 + problem_offsets[t]
             else:
-                logit_pC = offset_correct_h0 + offset_by_label[problems[t]]
+                logit_pC = offset_correct_h0 + problem_offsets[t]
             
             pC = 1/(1+np.exp(-logit_pC))
             ans = rng.binomial(1, pC)

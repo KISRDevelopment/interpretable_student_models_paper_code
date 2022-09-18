@@ -207,16 +207,13 @@ def main(cfg_path, dataset_name, output_path):
     seqs = to_student_sequences(df)
 
     
-    d = np.load("tmp/mnist.npz")
-    y = th.tensor(d['y']).long()
-    problem_features = th.tensor(d['data']).float() / 255.0
+    d = np.load("tmp/features_grid.npz")
+    problem_features = th.tensor(d['data']).float()
+
     if not cfg['with_features']:
         problem_features = problem_features * 0
-    
-    if cfg['with_features'] and cfg['problem_ids']:
-        problem_features = F.one_hot(y)
-        print(problem_features.shape)
-
+    elif cfg['actual_difficulties']:
+        problem_features = th.tensor(d['difficulties']).float()[:,None]
     all_ytrue = []
     all_ypred = []
 

@@ -4,17 +4,21 @@ import json
 
 def main():
 
-    n_rows = 16
-    n_cols = 16
-    ns_one_dim = np.arange(n_cols)
-    ns_two_dim = np.arange(n_rows)
+    m = 16
+    n_rows = m 
+    n_cols = m
+    ns_one_dim = np.arange(m)
+    ns_two_dim = np.arange(m)
     
-    reps = 10
+    reps = 50
 
     all_rules = set()
+
+    matrices = []
+    difficulties = []
+    negatives = 0
     for n_one_dim in ns_one_dim:
         for n_two_dim in ns_two_dim:
-            
             for r in range(reps):
                 rules, bool_mat = generate(n_rows, n_cols, n_one_dim, n_two_dim)
                 
@@ -22,22 +26,28 @@ def main():
                 neg_rules = sparsify(1-bool_mat)
                 d2 = calculate_difficulty(neg_rules)
 
+                difficulty = d1
                 if d2 < d1:
+                    negatives += 1
                     rules = neg_rules
-                
+                    difficulty = d2 
+
                 rules = tuple(sorted(rules))
                 if rules not in all_rules:
                     all_rules.add(rules)
-                
+                    matrices.append(bool_mat.flatten())
+                    difficulties.append(difficulty)
+
+    print("# negatives: %d"%negatives)
     print("# unique rules: %d"%len(all_rules))
 
-    difficulties = [calculate_difficulty(rules) for rules in all_rules]
+    np.savez("tmp/features_grid.npz", data=np.array(matrices), difficulties=difficulties)
 
     import matplotlib.pyplot as plt 
 
     f,ax = plt.subplots(1,1,figsize=(10,10))
     bin_counts = np.bincount(difficulties)
-    print(np.min(bin_counts))
+    
     ax.bar(np.arange(0, np.max(difficulties)+1), bin_counts)
     f.savefig("tmp/hist.png")
 
