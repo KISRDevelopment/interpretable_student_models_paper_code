@@ -22,6 +22,8 @@ def main():
 
     # generate trials
     cols = defaultdict(list)
+    
+    
     for s in range(n_students):
 
         # initialize state
@@ -31,6 +33,7 @@ def main():
         problem_instance_seq = rng.permutation(data.shape[0])
         problem_offsets = offsets[problem_instance_seq]
         
+
         for t in range(n_trials_per_student):
             # get p(correct|state)
 

@@ -1,6 +1,7 @@
 import numpy as np 
 import numpy.random as rng 
 import json 
+from collections import defaultdict
 
 def main():
 
@@ -14,9 +15,8 @@ def main():
 
     all_rules = set()
 
-    matrices = []
-    difficulties = []
     negatives = 0
+    by_difficulty = defaultdict(list)
     for n_one_dim in ns_one_dim:
         for n_two_dim in ns_two_dim:
             for r in range(reps):
@@ -35,9 +35,21 @@ def main():
                 rules = tuple(sorted(rules))
                 if rules not in all_rules:
                     all_rules.add(rules)
-                    matrices.append(bool_mat.flatten())
-                    difficulties.append(difficulty)
+                    by_difficulty[difficulty].append(bool_mat.flatten())
+    
+    to_sample = 100
+    matrices = []
+    difficulties = []
+    for d, ms in by_difficulty.items():
+        if len(ms) < to_sample:
+            continue 
+        
+        rng.shuffle(ms)
+        matrices.extend(ms[:to_sample])
+        difficulties.extend([d] * to_sample)
 
+    
+    
     print("# negatives: %d"%negatives)
     print("# unique rules: %d"%len(all_rules))
 

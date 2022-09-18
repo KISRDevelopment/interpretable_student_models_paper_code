@@ -77,12 +77,13 @@ class BktModel(nn.Module):
         super(BktModel, self).__init__()
 
         self.hidden = nn.Linear(n_features, n_hidden)
-        self.output = nn.Linear(n_hidden, 2)
+        self.output = nn.Linear(n_hidden, 1)
         self.hmm = MultiHmmCell(2, 2, n_kcs)
 
     def forward(self, corr, kc, FM):
         obs_logits_fv = self.hidden(FM) # n_batch x n_trials x n_hidden
-        obs_logits_fv = self.output(th.tanh(obs_logits_fv))[:,:,:,None] # n_batch x n_trials x n_states x 1
+        obs_logits_fv = self.output(th.tanh(obs_logits_fv)) # n_batch x n_trials x 1
+        obs_logits_fv = th.concat((obs_logits_fv, obs_logits_fv), dim=2)[:,:,:,None]
         obs_logits_fv = th.concat((obs_logits_fv,-obs_logits_fv), dim=3)
         return self.hmm(corr, kc, obs_logits_fv)
 
@@ -147,7 +148,7 @@ def train(train_seqs, valid_seqs, problem_features, n_kcs, device, learning_rate
         ytrue, ypred = predict(model, valid_seqs, problem_features, n_kcs, n_batch_seqs, device)
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
-        print("Train loss: %8.4f, Valid AUC: %0.2f" % (mean_train_loss, auc_roc))
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f" % (e, mean_train_loss, auc_roc))
         if e == 0 or auc_roc >= best_val_auc_roc:
             best_val_auc_roc = auc_roc
             epochs_since_last_best = 0
@@ -218,6 +219,7 @@ def main(cfg_path, dataset_name, output_path):
     all_ypred = []
 
     results = []
+    Wihs = []
     for s in range(splits.shape[0]):
         print("Split %d" % s)
         split = splits[s, :]
@@ -242,7 +244,10 @@ def main(cfg_path, dataset_name, output_path):
             n_kcs=n_kcs, 
             device='cuda:0',
             **cfg)
-
+        
+        Wih = model.hidden.state_dict()['weight'].cpu().numpy()
+        Wihs.append(Wih)
+        
         ytrue_test, log_ypred_test = predict(model, test_seqs, problem_features, n_kcs, cfg['n_batch_seqs'], 'cuda:0')
         
         ypred_test = np.exp(log_ypred_test)
@@ -261,7 +266,7 @@ def main(cfg_path, dataset_name, output_path):
     print(results_df)
 
     results_df.to_csv(output_path)
-
+    np.save(output_path.replace('.csv','') + "_Wih", np.array(Wihs))
 if __name__ == "__main__":
     import sys
     main(*sys.argv[1:])
