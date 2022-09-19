@@ -15,6 +15,8 @@ from collections import defaultdict
 from torch.nn.utils.rnn import pad_sequence
 import copy 
 import json
+import os 
+
 class MultiHmmCell(jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs, n_chains):
@@ -199,9 +201,7 @@ def predict(model, seqs, problem_features, n_kcs, n_batch_seqs, device):
     return ytrue, ypred
 
      
-def main(cfg_path, dataset_name, output_path):
-    with open(cfg_path, 'r') as f:
-        cfg = json.load(f)
+def main(cfg, dataset_name, output_path):
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)
@@ -214,12 +214,12 @@ def main(cfg_path, dataset_name, output_path):
     if not cfg['with_features']:
         problem_features = problem_features * 0
     elif cfg['actual_difficulties']:
+        print("Using actual difficulties!!")
         problem_features = th.tensor(d['difficulties']).float()[:,None]
     all_ytrue = []
     all_ypred = []
 
     results = []
-    Wihs = []
     for s in range(splits.shape[0]):
         print("Split %d" % s)
         split = splits[s, :]
@@ -244,10 +244,8 @@ def main(cfg_path, dataset_name, output_path):
             n_kcs=n_kcs, 
             device='cuda:0',
             **cfg)
-        
-        Wih = model.hidden.state_dict()['weight'].cpu().numpy()
-        Wihs.append(Wih)
-        
+        th.save(model.state_dict(), output_path.replace(".csv","_model"))
+       
         ytrue_test, log_ypred_test = predict(model, test_seqs, problem_features, n_kcs, cfg['n_batch_seqs'], 'cuda:0')
         
         ypred_test = np.exp(log_ypred_test)
@@ -266,7 +264,22 @@ def main(cfg_path, dataset_name, output_path):
     print(results_df)
 
     results_df.to_csv(output_path)
-    np.save(output_path.replace('.csv','') + "_Wih", np.array(Wihs))
 if __name__ == "__main__":
     import sys
-    main(*sys.argv[1:])
+    
+    cfg_path = 'cfgs/bkt-rep-learning.json'
+    dataset_name = 'rep_learning'
+    os.makedirs("data/results-replearning", exist_ok=True)
+
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
+    
+    main(cfg, dataset_name, 'data/results-replearning/bkt+features.csv')
+    
+    cfg['actual_difficulties'] = True 
+    main(cfg, dataset_name, 'data/results-replearning/bkt+upperbound.csv')
+    
+    cfg['with_features'] = False 
+    main(cfg, dataset_name, 'data/results-replearning/bkt.csv')
+    
+

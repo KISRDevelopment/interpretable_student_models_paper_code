@@ -5,43 +5,29 @@ import matplotlib.pyplot as plt
 import glob 
 import os 
 
+model_names = {
+    'bkt' : 'BKT',
+    'bkt+features' : 'BKT+Problem Features',
+    'bkt+upperbound' : 'Upper Bound'
+}
 def main(path):
 
-    reported_df = load_reported_results(['Best-LR','DKT-Items'])
-    
     df = load_results(path)
+    df['model'] = [model_names[m] for m in df['model']]
     df.sort_values('model', inplace=True)
+    print(df)
     
     datasets = sorted(set(df['dataset']))
     
-    n_cols = int(np.ceil(len(datasets)/2))
-    f, axes = plt.subplots(2, n_cols, figsize=(20, 10))
-    axes = axes.flatten()
-    for i, ax in enumerate(axes):
-        dataset = datasets[i]
-        ix = (df['dataset'] == dataset) & (df['split'] != 'Overall')
-        sdf = df[ix]
-        
-        sdf = pd.concat((sdf, reported_df[reported_df['dataset']==dataset]), axis=0, ignore_index=True)
-        plot_results(ax, sdf, 'auc_roc', '', dataset, show_xtick_labels=(i//n_cols) > 0)
-    f.subplots_adjust(wspace=0.3, hspace=0.2)
-    plt.savefig("tmp/results.png", bbox_inches='tight', dpi=120)
+    f, ax = plt.subplots(1, 1, figsize=(5, 10))
 
-def load_reported_results(selected_models, n_splits=5):
-    df = pd.read_csv("reported_results_gervetetal.csv")
-    df = df[df['model'].isin(selected_models)]
-    df = pd.melt(df, id_vars='model', value_vars=df.columns[1:], var_name='dataset', value_name='auc_roc')
-    dfs = []
-    for s in range(n_splits):
-        sdf = df.copy()
-        sdf['split'] = 'Split %d' % s
-        dfs.append(sdf)
-    
-    df = pd.concat(dfs, axis=0, ignore_index=True)
-    
-    return df
+    ix =(df['split'] != 'Overall')
+    sdf = df[ix]
+    plot_results(ax, sdf, 'auc_roc', '', '', show_xtick_labels=True)
 
-def plot_results(ax, df, col, ylabel, title, ylim=None, show_xtick_labels=False, ytick_interval=0.025):
+    plt.savefig("tmp/results_replearning.png", bbox_inches='tight', dpi=120)
+
+def plot_results(ax, df, col, ylabel, title, ylim=None, show_xtick_labels=False, ytick_interval=0.025, len_ticks=15):
 
     gdf = df.groupby('model', sort=False)
 
@@ -70,7 +56,7 @@ def plot_results(ax, df, col, ylabel, title, ylim=None, show_xtick_labels=False,
 
     actual_yticks = ax.get_yticks()
     yticks = [actual_yticks[0]]
-    while len(yticks) < 10:
+    while len(yticks) < len_ticks:
         yticks.append(yticks[-1] + ytick_interval)
     yticks = np.round(yticks, 3)
     ax.set_yticks(yticks)
@@ -88,7 +74,7 @@ def load_results(path):
         dataset = dataset.replace('gervetetal_','')
         df = pd.read_csv(file)
         df['model'] = model 
-        df['dataset'] = dataset 
+        df['dataset'] = 'replearning' 
         
         dfs.append(df)
     
