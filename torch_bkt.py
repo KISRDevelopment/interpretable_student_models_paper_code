@@ -15,6 +15,8 @@ from collections import defaultdict
 from torch.nn.utils.rnn import pad_sequence
 import copy 
 import json
+import time 
+
 class MultiHmmCell(jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs, n_chains):
@@ -244,16 +246,23 @@ def main(cfg_path, dataset_name, output_path):
         test_seqs = [seqs[s] for s in test_students]
 
         n_kcs = int(np.max(df['skill']) + 1)
+
+        tic = time.perf_counter()
+
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
             device='cuda:0',
             **cfg)
 
         ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_batch_seqs'], 'cuda:0')
-        
+        toc = time.perf_counter()
+
         ypred_test = np.exp(log_ypred_test)
 
-        results.append(metrics.calculate_metrics(ytrue_test, ypred_test))
+        run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
+        run_result['time_diff_sec'] = toc - tic 
+
+        results.append(run_result)
         all_ytrue.extend(ytrue_test)
         all_ypred.extend(ypred_test)
 

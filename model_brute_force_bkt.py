@@ -10,6 +10,7 @@ import subprocess
 from numba import jit
 import itertools 
 from numba.typed import List
+import time 
 
 def main():
     input_path = sys.argv[1]
@@ -22,6 +23,7 @@ def main():
 
     results = []
     for split_id in range(splits.shape[0]):
+
         split = splits[split_id, :]
 
         train_df = master_df[(split == 2) | (split == 1)]
@@ -38,10 +40,13 @@ def main():
         train_seqs_by_skill = prepare(train_df)
         test_seqs_by_skill = prepare(test_df)
 
+        tic = time.perf_counter()
+
         params = fit_bkt(train_seqs_by_skill, True)
         
         all_obs, all_probs = test_bkt(params, test_seqs_by_skill)
-        
+        toc = time.perf_counter()
+
         loglik = all_obs * np.log(all_probs) + (1-all_obs) * np.log(1-all_probs)
 
         print("Test loglik: %0.4f" % np.sum(loglik))
@@ -53,32 +58,20 @@ def main():
         np.random.shuffle(rand_probs)
         auc_pr_null = sklearn.metrics.average_precision_score(all_obs, rand_probs)
         print("Test AUC-ROC: %0.2f, AUC-PR: %0.2f (Null: %0.2f)" % (auc_roc, auc_pr, auc_pr_null))
-
-        per_skill_roc = []
-        for skill, seqs in test_seqs_by_skill.items():
-            
-            all_obs, all_probs = test_bkt(params, { skill: seqs })
-            
-            if np.min(all_obs) != np.max(all_obs):
-                auc_roc = sklearn.metrics.roc_auc_score(all_obs, all_probs)
-                #auc_pr = sklearn.metrics.average_precision_score(all_obs, all_probs)
-            else:
-                auc_roc = np.nan
-            per_skill_roc.append(auc_roc)
         
-        print("Skills with nans: %d" % np.sum(np.isnan(per_skill_roc)))
-        print("Per-skill ROC: %0.2f" % np.nanmean(per_skill_roc))
         row = {
             "auc_roc" : auc_roc,
             "auc_pr" : auc_pr,
             "auc_pr_null" : auc_pr_null,
-            "bacc" : bacc
+            "bacc" : bacc,
+            "time_diff_sec" : toc - tic
         }
         results.append(row)
+        print(pd.DataFrame(results))
     
     results_df = pd.DataFrame(results)
     print(results_df)
-
+    results_df.to_csv(output_path, index=False)
 
 def prepare(df):
     """ prepares data to be fitted by multiple BKT models, one per skill """
