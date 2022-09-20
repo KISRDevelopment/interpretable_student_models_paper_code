@@ -24,7 +24,7 @@ def main(path):
         mean_sec = sdf.groupby('n_students')['time_diff_sec'].agg('mean')
         std_sec = sdf.groupby('n_students')['time_diff_sec'].agg(lambda vals: np.std(vals,ddof=1)/np.sqrt(len(vals)))
         
-        ax.errorbar(np.arange(mean_sec.index.shape[0]), mean_sec, 
+        ax.errorbar(mean_sec.index, mean_sec, 
             label=MODEL_NAMES[model],
             yerr=std_sec, markersize=5, marker='o', elinewidth=2, linewidth=2, capsize=2.5)
     
@@ -33,8 +33,8 @@ def main(path):
     ax.set_ylabel('Mean Time (sec)', fontsize=22)
     ax.xaxis.set_tick_params(labelsize=22, rotation=90)
     ax.yaxis.set_tick_params(labelsize=22)
-    ax.set_xticks(np.arange(mean_sec.index.shape[0]))
-    ax.set_xticklabels(mean_sec.index)
+    #ax.set_xticks(mean_sec.index)
+    #ax.set_xticklabels(mean_sec.index)
     ax.legend(fontsize=22, frameon=False)
     ax.set_title('BKT Implementations Performance Comparison', fontsize=32)
     plt.savefig("tmp/results_perf.png", bbox_inches='tight', dpi=120)
