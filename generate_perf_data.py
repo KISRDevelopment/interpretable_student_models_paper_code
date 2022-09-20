@@ -7,7 +7,19 @@ import split_dataset
 def main():
     rng.seed(6456)
 
-    ns_students = [8, 64, 512, 4096]
+    ns_students = [
+        # 8,
+        # 16, 
+        # 32,
+        # 64, 
+        # 128, 
+        # 256,
+        # 512,
+        # 1024,
+        # 2048,
+        # 4096,
+        8192
+    ]
     n_skills = 50
     n_trials_per_skill = 10
 
@@ -17,8 +29,9 @@ def main():
     kc_seq = np.repeat(np.arange(n_skills), (n_trials_per_skill,))
     
     for n_students in ns_students:
-        print("Dataset size: %d students" % n_students)
 
+        print("Dataset size: %d students" % n_students)
+         
         # generate trials
         cols = defaultdict(list)
     
