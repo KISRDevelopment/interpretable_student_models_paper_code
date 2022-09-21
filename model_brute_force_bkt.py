@@ -22,6 +22,7 @@ def main():
     splits = np.load(split_path)
 
     results = []
+    param_dfs = []
     for split_id in range(splits.shape[0]):
 
         split = splits[split_id, :]
@@ -73,9 +74,12 @@ def main():
         params_df.columns = ['pT', 'pF', 'pG', 'pS', 'pL0']
         params_df['skill'] = params_df.index 
         params_df = params_df.reset_index(drop=True)
-        
-        params_path = output_path.replace('.csv','.split%d.params.csv'%split_id)
-        params_df.to_csv(params_path, index=False)
+        params_df['split'] = split_id 
+        param_dfs.append(params_df)
+    
+
+    params_path = output_path.replace('.csv','.params.csv')
+    pd.concat(param_dfs, axis=0, ignore_index=True).to_csv(params_path, index=False)
         
 
     results_df = pd.DataFrame(results)
