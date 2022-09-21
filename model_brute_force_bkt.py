@@ -68,7 +68,16 @@ def main():
         }
         results.append(row)
         print(pd.DataFrame(results))
-    
+
+        params_df = pd.DataFrame.from_dict(params, orient='index')
+        params_df.columns = ['pT', 'pF', 'pG', 'pS', 'pL0']
+        params_df['skill'] = params_df.index 
+        params_df = params_df.reset_index(drop=True)
+        
+        params_path = output_path.replace('.csv','.split%d.params.csv'%split_id)
+        params_df.to_csv(params_path, index=False)
+        
+
     results_df = pd.DataFrame(results)
     print(results_df)
     results_df.to_csv(output_path, index=False)
