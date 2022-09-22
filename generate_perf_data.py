@@ -5,19 +5,19 @@ from collections import defaultdict
 import split_dataset
 
 def main():
-    rng.seed(6456)
+    rng.seed(7467)
 
     ns_students = [
-        # 8,
-        # 16, 
-        # 32,
-        # 64, 
-        # 128, 
-        # 256,
-        # 512,
-        # 1024,
-        # 2048,
-        # 4096,
+        8,
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
         8192
     ]
     n_skills = 50
@@ -25,6 +25,7 @@ def main():
 
     # pI, pL, pF, pG, pS
     probs = rng.random((n_skills, 5))
+    np.save("data/perf_data_probs.npy", probs)
 
     kc_seq = np.repeat(np.arange(n_skills), (n_trials_per_skill,))
     

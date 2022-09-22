@@ -70,7 +70,6 @@ class MultiHmmCell(jit.ScriptModule):
         
         return outputs
 
-
 class BktModel(nn.Module):
     def __init__(self, n_kcs):
         super(BktModel, self).__init__()
@@ -78,6 +77,13 @@ class BktModel(nn.Module):
 
     def forward(self, corr, kc):
         return self.hmm(corr, kc)
+
+    def get_params(self):
+        alpha = F.softmax(self.hmm.init_logits, dim=1) # n_chains x n_states
+        obs = F.softmax(self.hmm.obs_logits, dim=2) # n_chains x n_states x n_obs
+        t = F.softmax(self.hmm.trans_logits, dim=1) # n_chains x n_states x n_states
+        
+        return alpha, obs, t
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -227,6 +233,8 @@ def main(cfg_path, dataset_name, output_path):
     all_ypred = []
 
     results = []
+    all_params = defaultdict(list)
+
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -259,6 +267,12 @@ def main(cfg_path, dataset_name, output_path):
 
         ypred_test = np.exp(log_ypred_test)
 
+        with th.no_grad():
+            param_alpha, param_obs, param_t = model.get_params()
+            all_params['alpha'].append(param_alpha.cpu().numpy())
+            all_params['obs'].append(param_obs.cpu().numpy())
+            all_params['t'].append(param_t.cpu().numpy())
+
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         run_result['time_diff_sec'] = toc - tic 
 
@@ -276,6 +290,9 @@ def main(cfg_path, dataset_name, output_path):
     print(results_df)
 
     results_df.to_csv(output_path)
+
+    param_output_path = output_path.replace(".csv", ".params.npy")
+    np.savez(param_output_path, **all_params)
 
 if __name__ == "__main__":
     import sys

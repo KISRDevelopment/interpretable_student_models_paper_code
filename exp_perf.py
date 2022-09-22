@@ -8,6 +8,7 @@ datasets = [os.path.basename(p).replace('.csv','') for p in
 os.makedirs("data/results-perf", exist_ok=True)
 
 cfg_name = 'bkt-brute-force'
+datasets = sorted(datasets, key=lambda d: int(d.split('_')[1]))
 for dataset in datasets:
     if os.path.exists("data/results-perf/%s_%s.csv"%(cfg_name, dataset)):
         continue
