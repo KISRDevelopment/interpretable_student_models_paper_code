@@ -5,7 +5,7 @@ import shlex
 import re 
 import metrics 
 
-TRAIN_COMMAND = "../hmm-scalable/trainhmm -s 1.1 -m 1 -p 1 -l 0,0,0,0,0,0,0,0,0,0 -u 1,1,1,1,1,1,1,1,1,1 %s tmp/model.txt tmp/predict.csv"
+TRAIN_COMMAND = "../hmm-scalable/trainhmm -s 1.1 -m 1 -p 1 -l 0,0,0,0,0,0,0,0,0,0 -u 1,1,1,1,1,1,1,1,1,1 %s tmp/model.txt tmp/predict_.csv"
 PREDICT_COMMAND = "../hmm-scalable/predicthmm %s tmp/model.txt tmp/predict.csv"
 
 def run(train_df, test_df):
@@ -21,18 +21,22 @@ def run(train_df, test_df):
     
     output = subprocess.check_output(shlex.split(PREDICT_COMMAND % ('tmp/tmpformat_test.csv',)))
     lines = str(output, 'utf-8').split("\n")
+    
     time_line = lines[-4].split(" ")
     predict_time_sec = float(time_line[4])
     
     predict_df = pd.read_csv("tmp/predict.csv", header=None, sep='\t')
-    predict_df['correct'] = test_df['correct']
-
-    run_result = metrics.calculate_metrics(np.array(predict_df['correct'] == 1), predict_df[0].to_numpy())
+    
+    run_result = metrics.calculate_metrics((test_df['correct']==1).to_numpy(), predict_df[0].to_numpy())
     run_result['time_diff_sec'] = predict_time_sec + fit_time_sec
     return run_result
     
 if __name__ == "__main__":
-    dataset_name = 'perf_128'
+    import sys
+
+    dataset_name = sys.argv[1]
+    output_path = sys.argv[2]
+
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)
     
@@ -53,4 +57,4 @@ if __name__ == "__main__":
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
     print(results_df)
 
-    #results_df.to_csv(output_path)
+    results_df.to_csv(output_path)

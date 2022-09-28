@@ -7,22 +7,30 @@ import os
 
 MODEL_NAMES = {
     'bkt-brute-force' : 'Brute Force',
-    'torch-bkt' : 'Pytorch'
+    'torch-bkt' : 'torch-bkt',
+    'torch-bkt-fast' : 'torch-bkt-fast',
+    'ref-bkt': 'hmm-scalable'
 }
 def main(path):
 
     df = load_results(path)
     df.sort_values('model', inplace=True)
     df = df[~pd.isna(df['time_diff_sec'])]
-    f, ax = plt.subplots(1, 1, figsize=(10, 5))
+    f, axes = plt.subplots(1, 2, figsize=(20, 5))
 
+    plot_curves(axes[0], df, 'time_diff_sec', 'Mean Time (sec)', 'Exectuion Time (Train+Predict)', True)
+    plot_curves(axes[1], df, 'auc_roc', 'Mean AUC-ROC', 'Test AUC-ROC', ylim=[0.7, 0.8])
+    
+    plt.savefig("tmp/results_perf.png", bbox_inches='tight', dpi=120)
+
+def plot_curves(ax, df, col, ylabel, title, show_legend=False, ylim=None):
     models = set(df['model'])
     for model in models:
         ix = df['model'] == model 
         sdf = df[ix]
         
-        mean_sec = sdf.groupby('n_students')['time_diff_sec'].agg('mean')
-        std_sec = sdf.groupby('n_students')['time_diff_sec'].agg(lambda vals: np.std(vals,ddof=1)/np.sqrt(len(vals)))
+        mean_sec = sdf.groupby('n_students')[col].agg('mean')
+        std_sec = sdf.groupby('n_students')[col].agg(lambda vals: np.std(vals,ddof=1)/np.sqrt(len(vals)))
         
         ax.errorbar(mean_sec.index, mean_sec, 
             label=MODEL_NAMES[model],
@@ -30,27 +38,30 @@ def main(path):
     
     ax.grid(True, linestyle='--')
     ax.set_xlabel('# of Students', fontsize=22)
-    ax.set_ylabel('Mean Time (sec)', fontsize=22)
+    ax.set_ylabel(ylabel, fontsize=22)
     ax.xaxis.set_tick_params(labelsize=22, rotation=90)
     ax.yaxis.set_tick_params(labelsize=22)
-    #ax.set_xticks(mean_sec.index)
-    #ax.set_xticklabels(mean_sec.index)
-    ax.legend(fontsize=22, frameon=False)
-    ax.set_title('BKT Implementations Performance Comparison', fontsize=32)
-    plt.savefig("tmp/results_perf.png", bbox_inches='tight', dpi=120)
 
+    if show_legend:
+        ax.legend(fontsize=22, frameon=False)
+    
+    if ylim:
+        ax.set_ylim(ylim)
+    ax.set_title(title, fontsize=32)
 def load_results(path):
 
     files = glob.glob(path + "/*.csv")
 
     dfs = []
     for file in files:
+        if '.params' in file:
+            continue
         parts = os.path.basename(file).replace('.csv','').split('_')
         model, dataset = parts[0], '_'.join(parts[1:])
         df = pd.read_csv(file)
         df['model'] = model 
 
-        _, n_students = dataset.split('_')
+        n_students = dataset.split('_')[-1]
         n_students = int(n_students)
         df['n_students'] = n_students
         

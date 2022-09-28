@@ -37,3 +37,16 @@ for dataset in datasets:
 
     subprocess.call(['python', model_script, cfg_path, dataset, output_path])
 
+
+cfg_name = 'ref-bkt'
+model_script = "ref_hmm.py"
+
+for dataset in datasets:
+    if os.path.exists("data/results-perf/%s_%s.csv"%(cfg_name, dataset)):
+        continue
+    
+    print(cfg_name, dataset)
+    output_path = "data/results-perf/%s_%s.csv" % (cfg_name, dataset)
+
+    subprocess.call(['python', model_script, dataset, output_path])
+    

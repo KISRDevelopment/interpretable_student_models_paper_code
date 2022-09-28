@@ -95,16 +95,15 @@ def to_student_sequences(df):
         seqs[r.student]["kc"].append(r.skill)
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, patience, n_batch_seqs):
+def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule,**kwargs):
 
     model = BktModel(n_kcs)
     model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
-    best_val_auc_roc =  0.5
+    
     best_state = None 
-    epochs_since_last_best = 0
-
+    
     for e in range(epochs):
         np.random.shuffle(train_seqs)
         losses = []
@@ -138,15 +137,15 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, patience
         ytrue, ypred = predict(model, valid_seqs, n_batch_seqs, device)
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
-        print("Train loss: %8.4f, Valid AUC: %0.2f" % (mean_train_loss, auc_roc))
-        if auc_roc > best_val_auc_roc:
-            best_val_auc_roc = auc_roc
-            epochs_since_last_best = 0
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f" % (e, mean_train_loss, auc_roc))
+        
+        r = stopping_rule(auc_roc)
+
+        if r['new_best']:
+            print("=== New best")
             best_state = copy.deepcopy(model.state_dict())
-        else:
-            epochs_since_last_best += 1
-            
-        if epochs_since_last_best >= patience:
+        
+        if r['stop']:
             break
 
     model.load_state_dict(best_state)
@@ -185,41 +184,37 @@ def predict(model, seqs, n_batch_seqs, device):
 
     return ytrue, ypred
 
+def create_early_stopping_rule(patience, min_perc_improvement):
+
+    best_value = -np.inf 
+    waited = 0
+    def stop(value):
+        nonlocal best_value
+        nonlocal waited 
+
+        if np.isinf(best_value):
+            best_value = value
+            return { "stop" : False, "new_best" : True } 
         
+        perc_improvement = (value - best_value)*100/best_value
+        new_best = False
+        if value > best_value:
+            best_value = value 
+            new_best = True 
+        
+        # only reset counter if more than min percent improvement
+        # otherwise continue increasing
+        if perc_improvement > min_perc_improvement:
+            waited = 0
+        else:
+            waited += 1
+        
+        if waited >= patience:
+            return { "stop" : True, "new_best" : new_best }
+        
+        return { "stop" : False, "new_best" : new_best }
 
-def main():
-    df = pd.read_csv("data/datasets/gervetetal_bridge_algebra06.csv")
-    seqs = to_student_sequences(df)
-    
-    splits = np.load("data/splits/gervetetal_bridge_algebra06.npy")
-    split = splits[0, :]
-
-    train_ix = split == 2
-    valid_ix = split == 1
-    test_ix = split == 0
-
-    train_students = set(df[train_ix]['student'])
-    valid_students = set(df[valid_ix]['student'])
-    test_students = set(df[test_ix]['student'])
-
-    train_seqs = [seqs[s] for s in train_students]
-    valid_seqs = [seqs[s] for s in valid_students]
-    test_seqs = [seqs[s] for s in test_students]
-
-    n_kcs = int(np.max(df['skill']) + 1)
-    model = train(train_seqs, 
-                  valid_seqs,
-                  n_kcs,
-                  device='cuda:0', 
-                  learning_rate=0.5, 
-                  epochs=20, 
-                  patience=5,
-                  n_batch_seqs=500)
-
-    ytrue_test, ypred_test = predict(model, test_seqs, 500, 'cuda:0')
-    auc_roc = metrics.calculate_metrics(ytrue_test, ypred_test)['auc_roc']
-
-    print("Test auc: %0.2f" % (auc_roc))
+    return stop
 
 def main(cfg_path, dataset_name, output_path):
     with open(cfg_path, 'r') as f:
@@ -257,9 +252,12 @@ def main(cfg_path, dataset_name, output_path):
 
         tic = time.perf_counter()
 
+        stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
+
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
             device='cuda:0',
+            stopping_rule=stopping_rule,
             **cfg)
 
         ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_batch_seqs'], 'cuda:0')
