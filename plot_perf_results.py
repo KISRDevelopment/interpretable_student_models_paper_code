@@ -18,13 +18,13 @@ def main(path):
     df = df[~pd.isna(df['time_diff_sec'])]
     f, axes = plt.subplots(1, 2, figsize=(20, 5))
 
-    plot_curves(axes[0], df, 'time_diff_sec', 'Mean Time (sec)', 'Exectuion Time (Train+Predict)', True)
+    plot_curves(axes[0], df, 'time_diff_sec', 'Mean Time (sec)', 'Exectuion Time (Train+Predict)', True, yticks=np.arange(0, 351, 50))
     plot_curves(axes[1], df, 'auc_roc', 'Mean AUC-ROC', 'Test AUC-ROC', ylim=[0.7, 0.8])
     
     plt.savefig("tmp/results_perf.png", bbox_inches='tight', dpi=120)
 
-def plot_curves(ax, df, col, ylabel, title, show_legend=False, ylim=None):
-    models = set(df['model'])
+def plot_curves(ax, df, col, ylabel, title, show_legend=False, ylim=None, yticks=None):
+    models = list(MODEL_NAMES.keys())
     for model in models:
         ix = df['model'] == model 
         sdf = df[ix]
@@ -47,6 +47,9 @@ def plot_curves(ax, df, col, ylabel, title, show_legend=False, ylim=None):
     
     if ylim:
         ax.set_ylim(ylim)
+    
+    if yticks is not None:
+        ax.set_yticks(yticks)
     ax.set_title(title, fontsize=32)
 def load_results(path):
 
