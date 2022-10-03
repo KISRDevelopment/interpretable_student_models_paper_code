@@ -12,22 +12,34 @@ def main():
     ns_students = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
     col_labels = ['pI0', 'pL', 'pF', 'pG', 'pS']
 
-    all_diffs = []
+    dfs = []
     for n_students in ns_students:
-        #diffs_by_kc = get_torch_bkt_probs("data/results-perf/torch-bkt_perf_%d.params.npy.npz" % n_students, actual_params)
+        diffs_by_kc = get_torch_bkt_probs("data/results-perf/torch-bkt_perf_%d.params.npy.npz" % n_students, actual_params)
+        df = reshape_df(diffs_by_kc)
+        df['model'] = 'torch-bkt'
+        df['n_students'] = n_students
+        dfs.append(df)
+
         diffs_by_kc = get_brute_force_bkt_probs("data/results-perf/bkt-brute-force_perf_%d.params.csv" % n_students, actual_params)
-        
-        all_diffs.append(diffs_by_kc)
+        df = reshape_df(diffs_by_kc)
+        df['model'] = 'brute-force-bkt'
+        df['n_students'] = n_students
+        dfs.append(df)
     
-    all_diffs = np.array(all_diffs)
+    df = pd.concat(dfs, axis=0, ignore_index=True)
     
-    f, ax = plt.subplots(1, 1, figsize=(10, 5))
-    for c in np.arange(all_diffs.shape[1]):
-        col = all_diffs[:,c]
-        ax.plot(ns_students, col, label=col_labels[c])
+    df.to_csv("tmp/results_param_recovery.csv", index=False)
+def reshape_df(diffs_by_kc):
     
-    ax.legend(fontsize=22, frameon=False)
-    f.savefig('tmp/figure_param_recovery.png', bbox_inches='tight', dpi=120)
+    n_kcs, n_folds, _ = diffs_by_kc.shape
+
+    diffs_by_kc = np.reshape(diffs_by_kc, (diffs_by_kc.shape[0]*diffs_by_kc.shape[1], diffs_by_kc.shape[2]))
+
+    df = pd.DataFrame(data=diffs_by_kc, columns=['pL0', 'pT', 'pF', 'pG', 'pS'])
+    df['kc'] = np.repeat(np.arange(n_kcs), n_folds)
+    df['fold'] = np.tile(np.arange(n_folds), n_kcs)
+
+    return df 
 
 def get_brute_force_bkt_probs(params_path, actual_params):
     learned_params = pd.read_csv(params_path)
@@ -45,7 +57,7 @@ def get_brute_force_bkt_probs(params_path, actual_params):
         else:
             print("knowing state", 0)
             diffs_by_kc[r.skill, r.split, :] = np.abs(np.array([1-r.pL0, r.pF, r.pT, 1-r.pS, 1-r.pG]) - actual_params[skill,:])
-    return np.mean(np.mean(diffs_by_kc, axis=1), axis=0)
+    return diffs_by_kc
 
 def get_torch_bkt_probs(params_path, actual_params):
     learned_params = np.load(params_path)
@@ -53,7 +65,7 @@ def get_torch_bkt_probs(params_path, actual_params):
 
     n_folds = alpha.shape[0]
     n_kcs = actual_params.shape[0]
-    diffs_by_kc = []
+    diffs_by_kc = np.zeros((n_kcs, n_folds, 5))
     for k in range(n_kcs):
 
         probs = np.zeros(5)
@@ -67,10 +79,9 @@ def get_torch_bkt_probs(params_path, actual_params):
             probs[3] = obs[f, k, 1-knowing_state, 1]
             probs[4] = obs[f, k, knowing_state, 0]
         
-        diff = np.abs(probs - actual_params[k,:])
-        diffs_by_kc.append(diff)
-        
-    diffs_by_kc = np.mean(diffs_by_kc, axis=0)
+            diff = np.abs(probs - actual_params[k,:])
+            diffs_by_kc[k, f, :] = diff
+    
     
     return diffs_by_kc
     
