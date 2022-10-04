@@ -78,13 +78,21 @@ class BktModel(nn.Module):
     def __init__(self, n_kcs, n_features, n_hidden):
         super(BktModel, self).__init__()
 
-        self.hidden = nn.Linear(n_features, n_hidden)
-        self.output = nn.Linear(n_hidden, 1)
+        if n_hidden > 0:
+            self.hidden = nn.Linear(n_features, n_hidden)
+            self.output = nn.Linear(n_hidden, 1)
+        else:
+            self.output = nn.Linear(n_features, 1)
+        self.n_hidden = n_hidden
         self.hmm = MultiHmmCell(2, 2, n_kcs)
 
     def forward(self, corr, kc, FM):
-        obs_logits_fv = self.hidden(FM) # n_batch x n_trials x n_hidden
-        obs_logits_fv = self.output(th.tanh(obs_logits_fv)) # n_batch x n_trials x 1
+        if self.n_hidden > 0:
+            obs_logits_fv = self.hidden(FM) # n_batch x n_trials x n_hidden
+            obs_logits_fv = self.output(th.tanh(obs_logits_fv)) # n_batch x n_trials x 1
+        else:
+            obs_logits_fv = self.output(FM) 
+        
         obs_logits_fv = th.concat((obs_logits_fv, obs_logits_fv), dim=2)[:,:,:,None]
         obs_logits_fv = th.concat((obs_logits_fv,-obs_logits_fv), dim=3)
         return self.hmm(corr, kc, obs_logits_fv)
@@ -275,6 +283,10 @@ if __name__ == "__main__":
         cfg = json.load(f)
     
     main(cfg, dataset_name, 'data/results-replearning/bkt+features.csv')
+    
+    cfg['n_hidden'] = 0
+    cfg['learning_rate'] = 0.001
+    main(cfg, dataset_name, 'data/results-replearning/bkt+features+no_hidden.csv')
     
     cfg['actual_difficulties'] = True 
     main(cfg, dataset_name, 'data/results-replearning/bkt+upperbound.csv')
