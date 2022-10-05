@@ -5,6 +5,5 @@
     "n_batch_trials" : 50, 
     "learning_rate" : 0.01,
     "patience" : 10,
-    "min_item_trials" : 50,
     "balanced_loss" : false
 }

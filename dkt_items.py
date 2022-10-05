@@ -14,13 +14,13 @@ class DKTModel(nn.Module):
         self.n_kcs = n_kcs 
         self.n_items = n_items
         self.cell = nn.LSTM(2 * n_kcs, n_hidden, num_layers=1, batch_first=True)
-        self.ff = nn.Linear(n_hidden, n_items)
+        self.item_embd = nn.Embedding(n_items, n_hidden)
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, cell_input, curr_item, state=None):
         """
             input: [n_batch, t, 2*n_kcs]
-            curr_item: [n_batch, t, n_items]
+            curr_item: [n_batch, t]
         """
         
         # if state is None:
@@ -33,10 +33,11 @@ class DKTModel(nn.Module):
         
         
         cell_output, last_state = self.cell(cell_input, state)
-        cell_output = self.dropout(cell_output)
+        cell_output = self.dropout(cell_output) # [n_batch, t, n_hidden]
 
-        item_logits = self.ff(cell_output) # [n_batch, t, n_items]
-        logits = (item_logits * curr_item).sum(dim=2) # [n_batch, t]
+        item_embedding = self.item_embd(curr_item) # [n_batch, t, n_hidden]
+        
+        logits = (item_embedding * cell_output).sum(dim=2) # [n_batch, t]
         
         return logits, last_state
 
@@ -201,7 +202,7 @@ def transform(subseqs, n_kcs, n_items):
     n_trials = len(subseqs[0])
 
     cell_input = np.zeros((n_batch, n_trials, 2*n_kcs))
-    curr_item = np.zeros((n_batch, n_trials, n_items))
+    curr_item = np.zeros((n_batch, n_trials))
     correct = np.zeros((n_batch, n_trials), dtype=int)
     included = np.zeros((n_batch, n_trials), dtype=int)
     
@@ -218,11 +219,11 @@ def transform(subseqs, n_kcs, n_items):
 
             if curr_trial is not None:
                 ci = curr_trial['problem']
-                curr_item[s, t, ci] = 1
+                curr_item[s, t] = ci
                 correct[s, t] = curr_trial['correct']
                 included[s,t] = 1
 
-    return th.tensor(cell_input).float(), th.tensor(curr_item).float(), th.tensor(correct).float(), th.tensor(included).float()
+    return th.tensor(cell_input).float(), th.tensor(curr_item).long(), th.tensor(correct).float(), th.tensor(included).float()
 
 def main(cfg_path, dataset_name, output_path):
     with open(cfg_path, 'r') as f:
@@ -230,9 +231,6 @@ def main(cfg_path, dataset_name, output_path):
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     
-    # relabel problems if there are too many (as it won't fit RAM)
-    reduce_problems(df, cfg)
-
     splits = np.load("data/splits/%s.npy" % dataset_name)
 
     all_ytrue = []
@@ -287,22 +285,6 @@ def main(cfg_path, dataset_name, output_path):
 
     results_df.to_csv(output_path)
 
-def reduce_problems(df, cfg):
-
-    problem_to_kc = dict(zip(df['problem'], df['skill']))
-
-    gdf = df.groupby('problem')['correct'].count()
-    problem_counts = dict(zip(gdf.index, gdf))
-
-    problem_labels = {
-        p: "kc %d" % (problem_to_kc[p]) if cnt < cfg['min_item_trials'] else p
-        for p, cnt in problem_counts.items()
-    }
-
-    labels = sorted(set(problem_labels.values()))
-    
-
-    exit()
 
 if __name__ == "__main__":
     import sys
