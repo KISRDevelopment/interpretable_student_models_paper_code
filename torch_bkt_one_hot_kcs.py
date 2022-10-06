@@ -48,30 +48,34 @@ class MultiHmmCell(jit.ScriptModule):
         log_obs = F.log_softmax(self.obs_logits, dim=2) # n_chains x n_states x n_obs
         log_t = F.log_softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
         
-        # [n_batch, n_chains, n_states]
+        # B X C X S
         log_alpha = th.tile(log_alpha, (n_batch, 1, 1))
         for i in range(0, obs.shape[1]):
-            curr_chain = chain[:,i,:] # [n_batch, n_chains]
+            curr_chain = chain[:,i,:] # B X C
             
             # predict
-            # B X S X O + B X S X 1
+            a1 = (curr_chain[:,:,None, None] * log_obs[None,:,:,:]).sum(1) # B X S X O
+            a2 = (curr_chain[:,:,None] * log_alpha).sum(1) # BXCX1 * BXCXS = BXS
 
-            y = (curr_chain[:,:,None,None] * log_obs[None,:,:,:]).sum(1) # B X C X 1 X 1 * 1 x C x S X O = B X S X O
-            x = (log_alpha * curr_chain[:,:,None]).sum(1) # B x C X S * B X C X 1 = B X C X S = B X S
-            log_py = th.logsumexp(y + x[:,:,None], dim=1)  #[n_batch, n_obs]
+            # B X S X O + B X S X 1
+            log_py = th.logsumexp(a1 + a2[:,:,None], dim=1)  # B X O
+            
             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
             outputs += [log_py]
 
             # update
             curr_y = obs[:,i]
-            print(curr_chain[:,:,None].shape)
-            print(log_obs[None,:,:,curr_y].shape)
-            log_py = (curr_chain[:,:,None] * log_obs[batch_idx,:,:,curr_y]).sum(1) # B X S
+            a1 = th.permute(log_obs[:,:,curr_y], (2, 0, 1)) # B X C X S
+            log_py = (a1 * curr_chain[:,:,None]).sum(1) # B X S
             
-            # B x 1 X S + B x 1 x S + B x S x S
-            x = (log_alpha * curr_chain[:,:,None]).sum(1) # B X S
-            x = th.logsumexp(log_py[:,None,:] + x[:,None,:] + th.matmul(curr_chain, log_t), dim=2) # B X S
-            log_alpha = log_alpha * (1 - curr_chain[:,:,None]) + curr_chain[:,:,None] * x[:,None,:] 
+
+            a1 = (log_alpha * curr_chain[:,:,None]).sum(1) # BxCxS * BxCx1 = BxS
+            a2 = (log_t[None,:,:,:] * curr_chain[:,:,None,None]).sum(1) # 1xCxSxS * BxCx1x1 = BxSxS
+            a3 = th.logsumexp(log_py[:,None,:] + a1[:,None,:] + a2, dim=2)
+
+            # B x 1 X S + B x 1 x S + B x S x S = B x S
+            log_alpha = (1 - curr_chain[:,:,None]) * log_alpha + curr_chain[:,:,None] * a3[:,None,:]
+        
         
         outputs = th.stack(outputs)
         outputs = th.transpose(outputs, 0, 1)
@@ -84,7 +88,7 @@ class BktModel(nn.Module):
         self.hmm = MultiHmmCell(2, 2, n_kcs)
         self.n_kcs = n_kcs
     def forward(self, corr, kc):
-        kc = F.one_hot(kc, num_classes=self.n_kcs)
+        kc = F.one_hot(kc, num_classes=self.n_kcs).float()
         return self.hmm(corr, kc)
 
     def get_params(self):
