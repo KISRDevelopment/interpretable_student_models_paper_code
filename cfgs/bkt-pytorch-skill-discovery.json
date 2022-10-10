@@ -6,5 +6,6 @@
     "tau" : 0.5,
     "n_latent_kcs" : 10,
     "n_valid_samples" : 10,
-    "n_test_samples" : 50
+    "n_test_samples" : 50,
+    "use_problems" : true
 }

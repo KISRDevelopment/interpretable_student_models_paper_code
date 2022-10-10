@@ -102,8 +102,9 @@ class BktModel(nn.Module):
     def forward(self, corr, kc):
         
         # B x T x C
-        kc = F.one_hot(kc, num_classes=self.n_kcs).float()
-        actual_kc = th.matmul(kc, self._A) # B X T X LC
+        #kc = F.one_hot(kc, num_classes=self.n_kcs).float()
+        
+        actual_kc = self._A[kc] #th.matmul(kc, self._A) # B X T X LC
 
         return self.hmm(corr, actual_kc)
 
@@ -258,7 +259,10 @@ def main(cfg_path, dataset_name, output_path):
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
     
+    
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    if cfg['use_problems']:
+        df['skill'] = df['problem']
     splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
