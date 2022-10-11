@@ -3,17 +3,17 @@ import pandas as pd
 import numpy.random as rng 
 from collections import defaultdict
 import split_dataset
-
+from scipy.stats import qmc
 def main():
-    rng.seed(7467)
-
-    n_students = 100
-    n_skills = 50
-    n_problems_per_skill = 10
-
+    
+    n_students = 500
+    n_problems_per_skill = 50
+    n_skills = 10
     
     # pI, pL, pF, pG, pS
-    probs = rng.random((n_skills, 5))
+    sampler = qmc.Sobol(d=5, scramble=True)
+    probs = sampler.random_base2(m=6)[:n_skills,:]
+    print(probs)
     
     # generate assignments
     kcs = np.repeat(np.arange(n_skills), (n_problems_per_skill,))

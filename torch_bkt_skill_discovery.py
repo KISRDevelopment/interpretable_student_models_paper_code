@@ -115,8 +115,9 @@ class BktModel(nn.Module):
         alpha = F.softmax(self.hmm.init_logits, dim=1) # n_chains x n_states
         obs = F.softmax(self.hmm.obs_logits, dim=2) # n_chains x n_states x n_obs
         t = F.softmax(self.hmm.trans_logits, dim=1) # n_chains x n_states x n_states
-        
-        return alpha, obs, t
+        kc_membership_probs = F.softmax(self.kc_membership_logits.weight, dim=1) # n_problems * n_latent_kcs
+
+        return alpha, obs, t, kc_membership_probs
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -264,13 +265,10 @@ def main(cfg_path, dataset_name, output_path):
     
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
-    
+    A = None
     if cfg['use_problems']:
-        A = initialize_assignment(df['skill'], df['problem'], np.max(df['problem'])+1, cfg['n_latent_kcs'])
         df['skill'] = df['problem']
-    else:
-        A = None
-        
+    
     splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
@@ -280,6 +278,7 @@ def main(cfg_path, dataset_name, output_path):
     results = []
     all_params = defaultdict(list)
 
+    splits = splits[[0],:]
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -317,11 +316,12 @@ def main(cfg_path, dataset_name, output_path):
         ypred_test = np.exp(log_ypred_test)
 
         with th.no_grad():
-            param_alpha, param_obs, param_t = model.get_params()
+            param_alpha, param_obs, param_t, Aprior = model.get_params()
             all_params['alpha'].append(param_alpha.cpu().numpy())
             all_params['obs'].append(param_obs.cpu().numpy())
             all_params['t'].append(param_t.cpu().numpy())
-
+            all_params['Aprior'].append(Aprior.cpu().numpy())
+        
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         run_result['time_diff_sec'] = toc - tic 
 
