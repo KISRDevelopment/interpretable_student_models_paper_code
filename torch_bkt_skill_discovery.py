@@ -79,10 +79,13 @@ class MultiHmmCell(jit.ScriptModule):
         return outputs
 
 class BktModel(nn.Module):
-    def __init__(self, n_kcs, n_latent_kcs):
+    def __init__(self, n_kcs, n_latent_kcs, A):
         super(BktModel, self).__init__()
 
-        self.kc_membership_logits = nn.Embedding(n_kcs, n_latent_kcs)
+        if A is None:
+            self.kc_membership_logits = nn.Embedding(n_kcs, n_latent_kcs)
+        else:
+            self.kc_membership_logits = nn.Embedding.from_pretrained(A, freeze=False)
         
         self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
         self.n_kcs = n_kcs
@@ -125,9 +128,9 @@ def to_student_sequences(df):
         seqs[r.student]["kc"].append(r.skill)
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
+def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
 
-    model = BktModel(n_kcs, kwargs['n_latent_kcs'])
+    model = BktModel(n_kcs, kwargs['n_latent_kcs'], None)
     model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
@@ -152,7 +155,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
             mask_ix = batch_mask_seqs.flatten()
 
-            train_loss = train_loss[mask_ix].mean()
+            train_loss = train_loss[mask_ix].mean() - kwargs['lambda'] * model.kc_membership_logits.weight[:,0].mean()
 
             optimizer.zero_grad()
             train_loss.backward()
@@ -261,8 +264,13 @@ def main(cfg_path, dataset_name, output_path):
     
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    
     if cfg['use_problems']:
+        A = initialize_assignment(df['skill'], df['problem'], np.max(df['problem'])+1, cfg['n_latent_kcs'])
         df['skill'] = df['problem']
+    else:
+        A = None
+        
     splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
@@ -298,6 +306,7 @@ def main(cfg_path, dataset_name, output_path):
 
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
+            A=A,
             device='cuda:0',
             stopping_rule=stopping_rule,
             **cfg)
@@ -334,6 +343,27 @@ def main(cfg_path, dataset_name, output_path):
     param_output_path = output_path.replace(".csv", ".params.npy")
     np.savez(param_output_path, **all_params)
 
+def initialize_assignment(skills, problems, n_problems, n_latent_kcs):
+    
+    skills_to_problems = create_one_to_many_mapping(skills, problems)
+    sorted_skills = sorted(skills_to_problems.keys(), key=lambda k: len(skills_to_problems[k]), reverse=True)
+
+    a = np.zeros((n_problems, n_latent_kcs))
+    next_latent_kc = 1
+    for k in sorted_skills:
+        for p in skills_to_problems[k]:
+            a[p, next_latent_kc] = 1
+        next_latent_kc = (next_latent_kc + 1) % n_latent_kcs
+        if next_latent_kc == 0:
+            next_latent_kc = 1
+    
+    return a
+
+def create_one_to_many_mapping(a,b):
+    mapping = defaultdict(set)
+    for x,y in zip(a,b):
+        mapping[x].add(y)
+    return mapping
 if __name__ == "__main__":
     import sys
     main(*sys.argv[1:])

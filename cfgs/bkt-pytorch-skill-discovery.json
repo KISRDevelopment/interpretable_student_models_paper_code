@@ -1,11 +1,12 @@
 {
-    "learning_rate" : 0.1, 
+    "learning_rate" : 0.2, 
     "epochs" : 100, 
-    "patience" : 10,
+    "patience" : 5,
     "n_batch_seqs" : 500,
     "tau" : 0.5,
-    "n_latent_kcs" : 10,
+    "n_latent_kcs" : 20,
     "n_valid_samples" : 10,
     "n_test_samples" : 50,
-    "use_problems" : true
+    "use_problems" : true,
+    "lambda" : 0.01
 }
