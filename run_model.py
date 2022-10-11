@@ -19,13 +19,18 @@ datasets = [os.path.basename(p).replace('.csv','') for p in glob.glob("data/data
 # model_script = "torch_bkt_irt.py"
 # cfg_name = "bkt-irt"
 
-cfg_path = "cfgs/bkt-irt-lr.json"
-model_script = "torch_bkt_irt_lr.py"
-cfg_name = "bkt-lr"
+# cfg_path = "cfgs/bkt-irt-lr.json"
+# model_script = "torch_bkt_irt_lr.py"
+# cfg_name = "bkt-lr"
 
-cfg_path = "cfgs/dkt-pytorch.json"
-model_script = "dkt_items.py"
-cfg_name = "dkt-items"
+# cfg_path = "cfgs/dkt-pytorch.json"
+# model_script = "dkt_items.py"
+# cfg_name = "dkt-items"
+
+cfg_path = "cfgs/bkt-pytorch-skill-discovery.json"
+model_script = "torch_bkt_skill_discovery.py"
+cfg_name = "bkt-sd"
+
 
 for dataset in datasets:
     if os.path.exists("data/results-pytorch/%s_%s.csv"%(cfg_name, dataset)):
