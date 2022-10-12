@@ -12,10 +12,14 @@ from torch.nn.utils.rnn import pad_sequence
 import copy 
 import json
 import time 
-
+from scipy.stats import qmc
 class MultiHmmCell(jit.ScriptModule):
     
-    def __init__(self, n_states, n_outputs, n_chains):
+    def __init__(self, n_states, n_outputs, n_chains,
+        initial_trans_logits,
+        initial_obs_logits,
+        initial_logits
+    ):
         super(MultiHmmCell, self).__init__()
         
         self.n_states = n_states
@@ -23,9 +27,9 @@ class MultiHmmCell(jit.ScriptModule):
         self.n_chains = n_chains 
 
         # [n_hidden,n_hidden] (Target,Source)
-        self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
-        self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
-        self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
+        self.trans_logits = nn.Parameter(initial_trans_logits)
+        self.obs_logits = nn.Parameter(initial_obs_logits)
+        self.init_logits = nn.Parameter(initial_logits)
         
     @jit.script_method
     def forward(self, obs: Tensor, chain: Tensor) -> Tensor:
@@ -87,7 +91,9 @@ class BktModel(nn.Module):
         else:
             self.kc_membership_logits = nn.Embedding.from_pretrained(A, freeze=False)
         
-        self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
+        initial_trans_logits, initial_obs_logits, initial_logits = initialize_params(n_latent_kcs)
+
+        self.hmm = MultiHmmCell(2, 2, n_latent_kcs, initial_trans_logits, initial_obs_logits, initial_logits)
         self.n_kcs = n_kcs
         self.n_latent_kcs = n_latent_kcs
 
@@ -169,7 +175,7 @@ def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_bat
         #
         # Validation
         #
-        ytrue, ypred = predict(model, valid_seqs, n_batch_seqs, device, kwargs['n_valid_samples'])
+        ytrue, ypred = predict(model, valid_seqs, kwargs['n_test_batch_seqs'], device, kwargs['n_valid_samples'])
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         print("%4d Train loss: %8.4f, Valid AUC: %0.2f" % (e, mean_train_loss, auc_roc))
@@ -280,7 +286,7 @@ def main(cfg_path, dataset_name, output_path):
     results = []
     all_params = defaultdict(list)
 
-    #splits = splits[[0],:]
+    splits = splits[[0],:]
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -312,7 +318,7 @@ def main(cfg_path, dataset_name, output_path):
             stopping_rule=stopping_rule,
             **cfg)
 
-        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_batch_seqs'], 'cuda:0', cfg['n_test_samples'])
+        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_test_batch_seqs'], 'cuda:0', cfg['n_test_samples'])
         toc = time.perf_counter()
 
         ypred_test = np.exp(log_ypred_test)
@@ -366,6 +372,37 @@ def create_one_to_many_mapping(a,b):
     for x,y in zip(a,b):
         mapping[x].add(y)
     return mapping
+
+def initialize_params(n_kcs):
+    log2_n_skills = int(np.ceil(np.log(n_kcs) / np.log(2)))
+
+    sampler = qmc.Sobol(d=5, scramble=True)
+
+    # pI, pL, pF, pG, pS
+    probs = sampler.random_base2(m=log2_n_skills)[:n_kcs, :]
+    
+    # Target x Source
+    idx = np.arange(n_kcs)
+    trans_probs = np.zeros((n_kcs, 2, 2))
+    trans_probs[idx, 1, 0] = probs[:, 1]
+    trans_probs[idx, 0, 0] = 1 - probs[:, 1]
+    trans_probs[idx, 1, 1] = 1 - probs[:, 2]
+    trans_probs[idx, 0, 1] = probs[:, 2]
+
+    # States x Outputs
+    obs_probs = np.zeros((n_kcs, 2, 2))
+    obs_probs[idx, 0, 0] = 1 - probs[:,3]
+    obs_probs[idx, 0, 1] = probs[:,3]
+    obs_probs[idx, 1, 0] = probs[:,4]
+    obs_probs[idx, 1, 1] = 1 - probs[:, 4]
+
+    initial_probs = np.zeros((n_kcs, 2))
+    initial_probs[idx, 0] = 1 - probs[:, 0]
+    initial_probs[idx, 1] = probs[:, 0]
+
+    # transform to logits
+    return th.tensor(np.log(trans_probs)).float(), th.tensor(np.log(obs_probs)).float(), th.tensor(np.log(initial_probs)).float()
+
 if __name__ == "__main__":
     import sys
     main(*sys.argv[1:])
