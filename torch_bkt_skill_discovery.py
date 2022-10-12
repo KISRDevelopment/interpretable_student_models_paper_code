@@ -86,35 +86,36 @@ class BktModel(nn.Module):
     def __init__(self, n_kcs, n_latent_kcs, A):
         super(BktModel, self).__init__()
 
+        initial_trans_logits, initial_obs_logits, initial_logits = initialize_params(n_latent_kcs)
+        n_latent_kcs = initial_obs_logits.shape[0]
+        print(n_latent_kcs)
+
         if A is None:
             self.kc_membership_logits = nn.Embedding(n_kcs, n_latent_kcs)
         else:
-            self.kc_membership_logits = nn.Embedding.from_pretrained(A, freeze=False)
-        
-        initial_trans_logits, initial_obs_logits, initial_logits = initialize_params(n_latent_kcs)
+            self.kc_membership_logits = nn.Embedding.from_pretrained(A*10, freeze=False) 
+            
 
         self.hmm = MultiHmmCell(2, 2, n_latent_kcs, initial_trans_logits, initial_obs_logits, initial_logits)
         self.n_kcs = n_kcs
         self.n_latent_kcs = n_latent_kcs
 
-        if n_kcs == n_latent_kcs:
-            self._A = th.eye(n_kcs)
-        else:
-            self._A = None 
-
+        self._A = A 
+        
     def sample_A(self, tau):
-        if self.n_kcs == self.n_latent_kcs:
-            return
+        
+        if self.kc_membership_logits is None:
+            return 
         
         self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
-
+        
     def forward(self, corr, kc):
         
         # B x T x C
         #kc = F.one_hot(kc, num_classes=self.n_kcs).float()
         
         actual_kc = self._A[kc] #th.matmul(kc, self._A) # B X T X LC
-
+        
         return self.hmm(corr, actual_kc)
 
     def get_params(self):
@@ -137,7 +138,7 @@ def to_student_sequences(df):
 
 def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
 
-    model = BktModel(n_kcs, kwargs['n_latent_kcs'], None)
+    model = BktModel(n_kcs, kwargs['n_latent_kcs'], A)
     model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
@@ -155,15 +156,18 @@ def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_bat
             batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
-
-            model.sample_A(tau)
-            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
-            
-            train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
             mask_ix = batch_mask_seqs.flatten()
 
-            train_loss = train_loss[mask_ix].mean() - kwargs['lambda'] * model.kc_membership_logits.weight[:,0].mean()
-
+            train_losses = []
+            for rv in range(1):
+                model.sample_A(tau)
+                
+                output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
+                
+                train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
+                
+                train_losses.append(train_loss[mask_ix].mean())
+            train_loss = th.hstack(train_losses).mean()
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
@@ -275,8 +279,16 @@ def main(cfg_path, dataset_name, output_path):
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     A = None
     if cfg['use_problems']:
+        n_problems = np.max(df['problem']) + 1
+        n_kcs = np.max(df['skill']) + 1
+        A = np.zeros((n_problems, n_kcs))
+        for r in df.itertuples():
+            A[r.problem, r.skill] = 1
+        A = th.tensor(A).float().to('cuda:0')
+        cfg['n_latent_skills'] = A.shape[1]
         df['skill'] = df['problem']
 
+    
     splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
@@ -374,13 +386,23 @@ def create_one_to_many_mapping(a,b):
     return mapping
 
 def initialize_params(n_kcs):
-    log2_n_skills = int(np.ceil(np.log(n_kcs) / np.log(2)))
+    #log2_n_skills = int(np.ceil(np.log(n_kcs) / np.log(2)))
 
-    sampler = qmc.Sobol(d=5, scramble=True)
+    #sampler = qmc.Sobol(d=5, scramble=True)
 
     # pI, pL, pF, pG, pS
-    probs = sampler.random_base2(m=log2_n_skills)[:n_kcs, :]
+    #probs = sampler.random_base2(m=log2_n_skills)[:n_kcs, :]
     
+    probs = []
+    pIs = [0.01, 0.5, 0.99]
+    pLs = [0.01, 0.5, 0.99]
+    pFs = [0.01, 0.5, 0.99]
+    pGs = [0.2]
+    pSs = [0.2]
+    import itertools
+    probs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
+    n_kcs = probs.shape[0]
+
     # Target x Source
     idx = np.arange(n_kcs)
     trans_probs = np.zeros((n_kcs, 2, 2))

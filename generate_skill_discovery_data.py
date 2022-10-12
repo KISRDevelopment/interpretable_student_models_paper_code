@@ -8,9 +8,9 @@ import itertools
 def main(n_students, n_problems_per_skill):
     
     probs = []
-    pIs = [0., 0.5, 1.]
-    pLs = [0., 0.5, 1.]
-    pFs = [0., 0.5, 1.]
+    pIs = [0.01, 0.5, 0.99]
+    pLs = [0.01, 0.5, 0.99]
+    pFs = [0.01, 0.5, 0.99]
     pGs = [0.2]
     pSs = [0.2]
 

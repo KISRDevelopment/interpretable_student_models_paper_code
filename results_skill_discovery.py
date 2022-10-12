@@ -9,7 +9,7 @@ def main():
 
     d = np.load("data/skill_discovery_data_params.npz")
     actual_labels = d['A']
-    print(actual_labels.shape)
+    print(actual_labels)
 
     d = np.load("data/results-skill-discovery/n_latent_kcs_30.params.npy.npz")
     Aprior = d['Aprior']
@@ -24,7 +24,7 @@ def main():
             for i in range(A.shape[0]):
                 pred_labels[i, :] = np.random.multinomial(1, A[i,:])
             pred_labels = np.argmax(pred_labels, axis=1)
-            print(pred_labels.shape)
+            print(pred_labels)
             cols['split'].append(s)
             cols['sample'].append(r)
             cols['rand'].append(sklearn.metrics.rand_score(actual_labels, pred_labels))
