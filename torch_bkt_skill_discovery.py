@@ -260,15 +260,17 @@ def create_early_stopping_rule(patience, min_perc_improvement):
     return stop
 
 def main(cfg_path, dataset_name, output_path):
-    with open(cfg_path, 'r') as f:
-        cfg = json.load(f)
-    
+    if type(cfg_path) == str:
+        with open(cfg_path, 'r') as f:
+            cfg = json.load(f)
+    elif type(cfg_path) == dict:
+        cfg = cfg_path
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     A = None
     if cfg['use_problems']:
         df['skill'] = df['problem']
-    
+
     splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
@@ -278,7 +280,7 @@ def main(cfg_path, dataset_name, output_path):
     results = []
     all_params = defaultdict(list)
 
-    splits = splits[[0],:]
+    #splits = splits[[0],:]
     for s in range(splits.shape[0]):
         split = splits[s, :]
 

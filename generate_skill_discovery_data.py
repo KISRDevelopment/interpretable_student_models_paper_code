@@ -4,17 +4,26 @@ import numpy.random as rng
 from collections import defaultdict
 import split_dataset
 from scipy.stats import qmc
-def main():
+import itertools
+def main(n_students, n_problems_per_skill):
     
-    n_students = 500
-    n_problems_per_skill = 50
-    n_skills = 10
+    probs = []
+    pIs = [0., 0.5, 1.]
+    pLs = [0., 0.5, 1.]
+    pFs = [0., 0.5, 1.]
+    pGs = [0.2]
+    pSs = [0.2]
+
+    probs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
+    n_skills = probs.shape[0]
     
-    # pI, pL, pF, pG, pS
-    sampler = qmc.Sobol(d=5, scramble=True)
-    probs = sampler.random_base2(m=6)[:n_skills,:]
-    print(probs)
-    
+    # # pI, pL, pF, pG, pS
+    # sampler = qmc.Sobol(d=5, scramble=True)
+    # probs = sampler.random_base2(m=log2_n_skills)
+    # n_skills = 2**log2_n_skills
+    # print(probs)
+    # exit()
+
     # generate assignments
     kcs = np.repeat(np.arange(n_skills), (n_problems_per_skill,))
     problems = np.random.permutation(n_problems_per_skill * n_skills)
