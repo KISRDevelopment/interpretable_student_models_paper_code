@@ -11,7 +11,7 @@ def main():
     actual_labels = d['A']
     print(actual_labels)
 
-    d = np.load("data/results-skill-discovery/n_latent_kcs_30.params.npy.npz")
+    d = np.load("data/results-skill-discovery/n_latent_kcs_27.params.npy.npz")
     Aprior = d['Aprior']
     
     cols = defaultdict(list)

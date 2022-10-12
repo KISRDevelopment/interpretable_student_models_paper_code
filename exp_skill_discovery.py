@@ -11,15 +11,15 @@ def main():
 
     #generate_skill_discovery_data.main(n_problems_per_skill=10, n_students=n_students)
     
-    ns_latent_kcs = [30]
+    ns_latent_kcs = [27]
     for n_latent_kcs in ns_latent_kcs:
         cfg = {
-            "learning_rate" : 0.5, 
+            "learning_rate" : 0.8, 
             "epochs" : 100, 
-            "patience" : 5,
+            "patience" : 10,
             "n_test_batch_seqs" : n_students,
             "n_batch_seqs" : n_students // 10,
-            "tau" : 0.5,
+            "tau" : 1,
             "n_latent_kcs" : n_latent_kcs,
             "n_valid_samples" : 10,
             "n_test_samples" : 50,

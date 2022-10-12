@@ -173,7 +173,8 @@ def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_bat
             optimizer.step()
 
             losses.append(train_loss.item())
-        
+        # tau = np.maximum(0.5, tau * 0.95)
+        # print("new tau: %0.2f" % tau)
         mean_train_loss = np.mean(losses)
 
         #
@@ -279,13 +280,13 @@ def main(cfg_path, dataset_name, output_path):
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     A = None
     if cfg['use_problems']:
-        n_problems = np.max(df['problem']) + 1
-        n_kcs = np.max(df['skill']) + 1
-        A = np.zeros((n_problems, n_kcs))
-        for r in df.itertuples():
-            A[r.problem, r.skill] = 1
-        A = th.tensor(A).float().to('cuda:0')
-        cfg['n_latent_skills'] = A.shape[1]
+        # n_problems = np.max(df['problem']) + 1
+        # n_kcs = np.max(df['skill']) + 1
+        # A = np.zeros((n_problems, n_kcs))
+        # for r in df.itertuples():
+        #     A[r.problem, r.skill] = 1
+        # A = th.tensor(A).float().to('cuda:0')
+        # cfg['n_latent_skills'] = A.shape[1]
         df['skill'] = df['problem']
 
     
