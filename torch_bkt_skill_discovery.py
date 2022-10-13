@@ -15,11 +15,7 @@ import time
 from scipy.stats import qmc
 class MultiHmmCell(jit.ScriptModule):
     
-    def __init__(self, n_states, n_outputs, n_chains,
-        initial_trans_logits,
-        initial_obs_logits,
-        initial_logits
-    ):
+    def __init__(self, n_states, n_outputs, n_chains):
         super(MultiHmmCell, self).__init__()
         
         self.n_states = n_states
@@ -27,9 +23,9 @@ class MultiHmmCell(jit.ScriptModule):
         self.n_chains = n_chains 
 
         # [n_hidden,n_hidden] (Target,Source)
-        self.trans_logits = nn.Parameter(initial_trans_logits)
-        self.obs_logits = nn.Parameter(initial_obs_logits)
-        self.init_logits = nn.Parameter(initial_logits)
+        self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
+        self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
+        self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
         
     @jit.script_method
     def forward(self, obs: Tensor, chain: Tensor) -> Tensor:
@@ -83,31 +79,23 @@ class MultiHmmCell(jit.ScriptModule):
         return outputs
 
 class BktModel(nn.Module):
-    def __init__(self, n_kcs, n_latent_kcs, A):
+    def __init__(self, n_kcs, n_latent_kcs):
         super(BktModel, self).__init__()
-
-        initial_trans_logits, initial_obs_logits, initial_logits = initialize_params(n_latent_kcs)
-        n_latent_kcs = initial_obs_logits.shape[0]
-        print(n_latent_kcs)
-
-        if A is None:
-            self.kc_membership_logits = nn.Embedding(n_kcs, n_latent_kcs)
-        else:
-            self.kc_membership_logits = nn.Embedding.from_pretrained(A*10, freeze=False) 
-            
-
-        self.hmm = MultiHmmCell(2, 2, n_latent_kcs, initial_trans_logits, initial_obs_logits, initial_logits)
+        
+        self.kc_membership_logits = nn.Embedding(n_kcs, n_latent_kcs)
+        
+        self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
         self.n_kcs = n_kcs
         self.n_latent_kcs = n_latent_kcs
 
-        self._A = A 
+        self._A = None
         
     def sample_A(self, tau):
         
         if self.kc_membership_logits is None:
             return 
         
-        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
+        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=False, tau=tau, dim=1)
         
     def forward(self, corr, kc):
         
@@ -136,9 +124,9 @@ def to_student_sequences(df):
         seqs[r.student]["kc"].append(r.skill)
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
+def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
 
-    model = BktModel(n_kcs, kwargs['n_latent_kcs'], A)
+    model = BktModel(n_kcs, kwargs['n_latent_kcs'])
     model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
@@ -158,16 +146,14 @@ def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_bat
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             mask_ix = batch_mask_seqs.flatten()
 
-            train_losses = []
-            for rv in range(1):
-                model.sample_A(tau)
+            model.sample_A(tau)
                 
-                output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
+            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
                 
-                train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
+            train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
                 
-                train_losses.append(train_loss[mask_ix].mean())
-            train_loss = th.hstack(train_losses).mean()
+            train_loss = train_loss[mask_ix].mean()
+
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
@@ -183,12 +169,12 @@ def train(train_seqs, valid_seqs, n_kcs, A, device, learning_rate, epochs, n_bat
         ytrue, ypred = predict(model, valid_seqs, kwargs['n_test_batch_seqs'], device, kwargs['n_valid_samples'])
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
-        print("%4d Train loss: %8.4f, Valid AUC: %0.2f" % (e, mean_train_loss, auc_roc))
         
         r = stopping_rule(auc_roc)
 
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if r['new_best'] else ''))
+        
         if r['new_best']:
-            print("=== New best")
             best_state = copy.deepcopy(model.state_dict())
         
         if r['stop']:
@@ -278,7 +264,7 @@ def main(cfg_path, dataset_name, output_path):
         cfg = cfg_path
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
-    A = None
+
     if cfg['use_problems']:
         # n_problems = np.max(df['problem']) + 1
         # n_kcs = np.max(df['skill']) + 1
@@ -326,7 +312,6 @@ def main(cfg_path, dataset_name, output_path):
 
         model = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
-            A=A,
             device='cuda:0',
             stopping_rule=stopping_rule,
             **cfg)
