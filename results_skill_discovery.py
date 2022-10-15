@@ -19,7 +19,7 @@ def main():
     for s in range(Aprior.shape[0]):
         A = Aprior[s,:,:]
         
-        A = A / np.sum(A+1e-6, axis=1, keepdims=True)
+        A = A / np.sum(A, axis=1, keepdims=True)
         
         for r in range(N_SAMPLES):
 

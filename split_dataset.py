@@ -5,9 +5,7 @@ from sklearn.model_selection import GroupKFold
 
 rng.seed(41)
 
-def main(dataset_path, output_path, n_folds=5, n_folds_inner=5):
-
-    df = pd.read_csv(dataset_path)
+def main(df, n_folds=5, n_folds_inner=5):
 
     students = np.array(df['student'])
     group_kfold = GroupKFold(n_splits=n_folds)
@@ -57,9 +55,12 @@ def main(dataset_path, output_path, n_folds=5, n_folds_inner=5):
     # ensure no repeated splits
     assert np.unique(full_splits, axis=0).shape[0] == full_splits.shape[0]
 
-    np.save(output_path, full_splits)
+    return full_splits
 
 if __name__ == "__main__":
     import sys 
 
-    main(sys.argv[1], sys.argv[2])
+    df = pd.read_csv(sys.argv[1])
+    full_splits = main(df)
+    np.save(sys.argv[2], full_splits)
+

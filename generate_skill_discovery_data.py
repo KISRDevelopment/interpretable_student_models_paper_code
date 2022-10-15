@@ -5,19 +5,9 @@ from collections import defaultdict
 import split_dataset
 from scipy.stats import qmc
 import itertools
-def main(n_students, n_problems_per_skill, n_skills):
+def main(n_students, n_problems_per_skill, n_skills, no_bkt=False):
     
-    # probs = []
-    # pIs = [0.01, 0.5, 0.99]
-    # pLs = [0.01, 0.5, 0.99]
-    # pFs = [0.01, 0.5, 0.99]
-    # pGs = [0.2]
-    # pSs = [0.2]
-
-    # probs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
-    # n_skills = probs.shape[0]
-    
-    # # pI, pL, pF, pG, pS
+    # pI, pL, pF, pG, pS
     probs = np.random.rand(n_skills, 5)
     
     # generate assignments
@@ -53,7 +43,9 @@ def main(n_students, n_problems_per_skill, n_skills):
                 pC = 1-pS
             else:
                 pC = pG
-                
+            
+            if no_bkt:
+                pC = pG
             ans = rng.binomial(1, pC)
             cols["student"].append(s)
             cols["correct"].append(ans)
@@ -70,10 +62,22 @@ def main(n_students, n_problems_per_skill, n_skills):
         
     print(np.mean(df['correct']))
 
-    dataset_name = "sd_%d" % n_students
-    df.to_csv("data/datasets/%s.csv" % dataset_name, index=False)
-    split_dataset.main("data/datasets/%s.csv" % dataset_name, 
-        "data/splits/%s.npy" % dataset_name, 5, 5)
+    # dataset_name = "sd_%d" % n_students
+    # df.to_csv("data/datasets/%s.csv" % dataset_name, index=False)
+    # split_dataset.main("data/datasets/%s.csv" % dataset_name, 
+    #     "data/splits/%s.npy" % dataset_name, 5, 5)
     
+    return df, probs, A 
+
 if __name__ == "__main__":
-    main()
+    import sys 
+    n_students = int(sys.argv[1]) 
+    n_problems_per_skill = int(sys.argv[2]) 
+    n_skills = int(sys.argv[3])
+    dataset_name = sys.argv[4]
+
+    df, probs, A = main(n_students, n_problems_per_skill, n_skills)
+
+    df.to_csv("data/datasets/%s.csv" % dataset_name, index=False)
+    splits = split_dataset.main(df, 5, 5)
+    np.save("data/splits/%s.npy" % dataset_name, splits)
