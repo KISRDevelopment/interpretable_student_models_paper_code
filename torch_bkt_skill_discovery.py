@@ -124,7 +124,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     
     best_state = None 
-    
+    best_rand_index = 0
     for e in range(epochs):
         np.random.shuffle(train_seqs)
         losses = []
@@ -195,13 +195,14 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
         
         if r['new_best']:
             best_state = copy.deepcopy(model.state_dict())
+            best_rand_index = rand_index
         
         if r['stop']:
             break
 
     model.load_state_dict(best_state)
 
-    return model
+    return model, best_rand_index
     
 
 def predict(model, seqs, n_batch_seqs, device, n_samples):
@@ -313,7 +314,7 @@ def main(cfg, df, splits):
 
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
 
-        model = train(train_seqs, valid_seqs, 
+        model, best_rand_index = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
             device='cuda:0',
             stopping_rule=stopping_rule,
@@ -333,7 +334,8 @@ def main(cfg, df, splits):
         
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         run_result['time_diff_sec'] = toc - tic 
-
+        run_result['adj_rand_index'] = best_rand_index
+        
         results.append(run_result)
         all_ytrue.extend(ytrue_test)
         all_ypred.extend(ypred_test)
@@ -341,10 +343,8 @@ def main(cfg, df, splits):
     all_ytrue = np.array(all_ytrue)
     all_ypred = np.array(all_ypred)
 
-    overall_metrics = metrics.calculate_metrics(all_ytrue, all_ypred)
-    results.append(overall_metrics)
-
-    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])] + ['Overall'])
+    
+    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
     
     return results_df, dict(all_params)
 
