@@ -12,7 +12,7 @@ from torch.nn.utils.rnn import pad_sequence
 import copy 
 import json
 import time 
-from scipy.stats import qmc
+import sklearn.metrics
 class MultiHmmCell(jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs, n_chains):
@@ -92,18 +92,10 @@ class BktModel(nn.Module):
         
     def sample_A(self, tau):
         
-        if self.kc_membership_logits is None:
-            return 
-        
         self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
         
     def forward(self, corr, kc):
-        
-        # B x T x C
-        #kc = F.one_hot(kc, num_classes=self.n_kcs).float()
-        
-        actual_kc = self._A[kc] #th.matmul(kc, self._A) # B X T X LC
-        
+        actual_kc = self._A[kc]
         return self.hmm(corr, actual_kc)
 
     def get_params(self):
@@ -165,28 +157,8 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
 
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten()
                     
-            #train_loss = train_loss[mask_ix].mean()
+            train_loss = train_loss[mask_ix].mean()
 
-            
-            train_losses = []
-            for kc in range(kwargs['n_latent_kcs']):
-                kc_ix = (final_kc_seq[:,:,kc] > 0).flatten().cpu()
-                #print(kc_ix.sum().item())
-                train_losses.append(train_loss[mask_ix & kc_ix].sum() / (1+kc_ix.sum()))
-            #print(train_losses)
-            train_loss = th.hstack(train_losses).mean()
-
-            # for r in range(10):
-            #     model.sample_A(tau)
-                    
-            #     output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
-                    
-            #     train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
-                    
-            #     train_loss = train_loss[mask_ix].mean()
-            #     train_losses.append(train_loss)
-
-            #train_loss = th.hstack(train_losses).mean()
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
@@ -203,9 +175,23 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         
+        rand_index = 0
+        if kwargs['ref_labels'] is not None:
+            with th.no_grad():
+                ref_labels = kwargs['ref_labels']
+                indecies = []
+                for s in range(100):
+                    model.sample_A(1e-6)
+                    pred_labels = th.argmax(model._A, dim=1).cpu().numpy()
+                    rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
+                    indecies.append(rand_index)
+                rand_index = np.mean(indecies)
+
         r = stopping_rule(auc_roc)
 
-        print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if r['new_best'] else ''))
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f (Rand: %0.2f) %s" % (e, mean_train_loss, auc_roc, 
+            rand_index,
+            '***' if r['new_best'] else ''))
         
         if r['new_best']:
             best_state = copy.deepcopy(model.state_dict())
@@ -289,27 +275,11 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 
     return stop
 
-def main(cfg_path, dataset_name, output_path):
-    if type(cfg_path) == str:
-        with open(cfg_path, 'r') as f:
-            cfg = json.load(f)
-    elif type(cfg_path) == dict:
-        cfg = cfg_path
+def main(cfg, df, splits):
     
-    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
-
     if cfg['use_problems']:
-        # n_problems = np.max(df['problem']) + 1
-        # n_kcs = np.max(df['skill']) + 1
-        # A = np.zeros((n_problems, n_kcs))
-        # for r in df.itertuples():
-        #     A[r.problem, r.skill] = 1
-        # A = th.tensor(A).float().to('cuda:0')
-        # cfg['n_latent_skills'] = A.shape[1]
         df['skill'] = df['problem']
 
-    
-    splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
     all_ytrue = []
@@ -375,75 +345,24 @@ def main(cfg_path, dataset_name, output_path):
     results.append(overall_metrics)
 
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])] + ['Overall'])
-    print(results_df)
+    
+    return results_df, dict(all_params)
+
+if __name__ == "__main__":
+    import sys
+
+    cfg_path = sys.argv[1]
+    dataset_name = sys.argv[2]
+    output_path = sys.argv[3]
+
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
+
+    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    splits = np.load("data/splits/%s.npy" % dataset_name)
+    results_df, all_params = main(cfg, df, splits)
 
     results_df.to_csv(output_path)
 
     param_output_path = output_path.replace(".csv", ".params.npy")
     np.savez(param_output_path, **all_params)
-
-def initialize_assignment(skills, problems, n_problems, n_latent_kcs):
-    
-    skills_to_problems = create_one_to_many_mapping(skills, problems)
-    sorted_skills = sorted(skills_to_problems.keys(), key=lambda k: len(skills_to_problems[k]), reverse=True)
-
-    a = np.zeros((n_problems, n_latent_kcs))
-    next_latent_kc = 1
-    for k in sorted_skills:
-        for p in skills_to_problems[k]:
-            a[p, next_latent_kc] = 1
-        next_latent_kc = (next_latent_kc + 1) % n_latent_kcs
-        if next_latent_kc == 0:
-            next_latent_kc = 1
-    
-    return a
-
-def create_one_to_many_mapping(a,b):
-    mapping = defaultdict(set)
-    for x,y in zip(a,b):
-        mapping[x].add(y)
-    return mapping
-
-def initialize_params(n_kcs):
-    #log2_n_skills = int(np.ceil(np.log(n_kcs) / np.log(2)))
-
-    #sampler = qmc.Sobol(d=5, scramble=True)
-
-    # pI, pL, pF, pG, pS
-    #probs = sampler.random_base2(m=log2_n_skills)[:n_kcs, :]
-    
-    probs = []
-    pIs = [0.01, 0.5, 0.99]
-    pLs = [0.01, 0.5, 0.99]
-    pFs = [0.01, 0.5, 0.99]
-    pGs = [0.2]
-    pSs = [0.2]
-    import itertools
-    probs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
-    n_kcs = probs.shape[0]
-
-    # Target x Source
-    idx = np.arange(n_kcs)
-    trans_probs = np.zeros((n_kcs, 2, 2))
-    trans_probs[idx, 1, 0] = probs[:, 1]
-    trans_probs[idx, 0, 0] = 1 - probs[:, 1]
-    trans_probs[idx, 1, 1] = 1 - probs[:, 2]
-    trans_probs[idx, 0, 1] = probs[:, 2]
-
-    # States x Outputs
-    obs_probs = np.zeros((n_kcs, 2, 2))
-    obs_probs[idx, 0, 0] = 1 - probs[:,3]
-    obs_probs[idx, 0, 1] = probs[:,3]
-    obs_probs[idx, 1, 0] = probs[:,4]
-    obs_probs[idx, 1, 1] = 1 - probs[:, 4]
-
-    initial_probs = np.zeros((n_kcs, 2))
-    initial_probs[idx, 0] = 1 - probs[:, 0]
-    initial_probs[idx, 1] = probs[:, 0]
-
-    # transform to logits
-    return th.tensor(np.log(trans_probs)).float(), th.tensor(np.log(obs_probs)).float(), th.tensor(np.log(initial_probs)).float()
-
-if __name__ == "__main__":
-    import sys
-    main(*sys.argv[1:])
