@@ -8,20 +8,22 @@ def main():
     os.makedirs("data/results-skill-discovery", exist_ok=True)
 
     n_students = 500
+    n_skills = 20
 
-    #generate_skill_discovery_data.main(n_problems_per_skill=10, n_students=n_students)
+    generate_skill_discovery_data.main(n_problems_per_skill=10, n_students=n_students, n_skills=n_skills)
     
     ns_latent_kcs = [30, 20, 10, 1]
     for n_latent_kcs in ns_latent_kcs:
         cfg = {
             "learning_rate" : 0.2, 
             "epochs" : 100, 
-            "patience" : 5,
+            "patience" : 10,
             "n_test_batch_seqs" : n_students,
             "n_batch_seqs" : n_students // 10,
             "tau" : 1.5,
             "n_latent_kcs" : n_latent_kcs,
             "n_valid_samples" : 10,
+            "n_train_samples" : 10,
             "n_test_samples" : 50,
             "use_problems" : True,
             "lambda" : 0.00

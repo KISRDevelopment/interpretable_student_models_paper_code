@@ -5,25 +5,21 @@ from collections import defaultdict
 import split_dataset
 from scipy.stats import qmc
 import itertools
-def main(n_students, n_problems_per_skill):
+def main(n_students, n_problems_per_skill, n_skills):
     
-    probs = []
-    pIs = [0.01, 0.5, 0.99]
-    pLs = [0.01, 0.5, 0.99]
-    pFs = [0.01, 0.5, 0.99]
-    pGs = [0.2]
-    pSs = [0.2]
+    # probs = []
+    # pIs = [0.01, 0.5, 0.99]
+    # pLs = [0.01, 0.5, 0.99]
+    # pFs = [0.01, 0.5, 0.99]
+    # pGs = [0.2]
+    # pSs = [0.2]
 
-    probs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
-    n_skills = probs.shape[0]
+    # probs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
+    # n_skills = probs.shape[0]
     
     # # pI, pL, pF, pG, pS
-    # sampler = qmc.Sobol(d=5, scramble=True)
-    # probs = sampler.random_base2(m=log2_n_skills)
-    # n_skills = 2**log2_n_skills
-    # print(probs)
-    # exit()
-
+    probs = np.random.rand(n_skills, 5)
+    
     # generate assignments
     kcs = np.repeat(np.arange(n_skills), (n_problems_per_skill,))
     problems = np.random.permutation(n_problems_per_skill * n_skills)

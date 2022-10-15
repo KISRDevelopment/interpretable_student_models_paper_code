@@ -144,16 +144,39 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
-            mask_ix = batch_mask_seqs.flatten()
+            
+            rep_obs_seqs = []
+            rep_kc_seqs = []
+            rep_mask_seqs = []
+            for r in range(kwargs['n_train_samples']):
+                model.sample_A(tau)
+                actual_kc = model._A[batch_kc_seqs] #th.matmul(kc, self._A) # B X T X LC
+                rep_obs_seqs.append(batch_obs_seqs)
+                rep_kc_seqs.append(actual_kc)
+                rep_mask_seqs.append(batch_mask_seqs)
+            
+            final_obs_seq = th.vstack(rep_obs_seqs)
+            final_kc_seq = th.vstack(rep_kc_seqs)
+            final_mask_seq = th.vstack(rep_mask_seqs)
+            mask_ix = final_mask_seq.flatten()
 
-            model.sample_A(tau)
-                
-            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
-                
-            train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
-                
+            output = model.hmm(final_obs_seq, final_kc_seq).cpu()
+
+            train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten()
+                    
             train_loss = train_loss[mask_ix].mean()
+            
+            # for r in range(10):
+            #     model.sample_A(tau)
+                    
+            #     output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
+                    
+            #     train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
+                    
+            #     train_loss = train_loss[mask_ix].mean()
+            #     train_losses.append(train_loss)
 
+            #train_loss = th.hstack(train_losses).mean()
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()

@@ -6,12 +6,13 @@ from collections import defaultdict
 N_SAMPLES = 100
 
 def main():
+    n_latent_kcs = 20
 
     d = np.load("data/skill_discovery_data_params.npz")
     actual_labels = d['A']
     print(actual_labels)
 
-    d = np.load("data/results-skill-discovery/n_latent_kcs_30.params.npy.npz")
+    d = np.load("data/results-skill-discovery/n_latent_kcs_%d.params.npy.npz" % n_latent_kcs)
     Aprior = d['Aprior']
     
     cols = defaultdict(list)
