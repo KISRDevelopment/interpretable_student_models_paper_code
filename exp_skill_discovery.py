@@ -10,9 +10,9 @@ def main():
     n_students = 500
     n_skills = 20
 
-    generate_skill_discovery_data.main(n_problems_per_skill=10, n_students=n_students, n_skills=n_skills)
+    #generate_skill_discovery_data.main(n_problems_per_skill=10, n_students=n_students, n_skills=n_skills)
     
-    ns_latent_kcs = [30, 20, 10, 1]
+    ns_latent_kcs = [20]
     for n_latent_kcs in ns_latent_kcs:
         cfg = {
             "learning_rate" : 0.2, 
@@ -23,10 +23,10 @@ def main():
             "tau" : 1.5,
             "n_latent_kcs" : n_latent_kcs,
             "n_valid_samples" : 10,
-            "n_train_samples" : 10,
+            "n_train_samples" : 50,
             "n_test_samples" : 50,
             "use_problems" : True,
-            "lambda" : 0.00
+            "lambda" : 0.000
         }
         torch_bkt_skill_discovery.main(cfg, "sd_%d" % n_students, "data/results-skill-discovery/n_latent_kcs_%d.csv"%n_latent_kcs)
 

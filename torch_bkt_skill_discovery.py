@@ -95,7 +95,7 @@ class BktModel(nn.Module):
         if self.kc_membership_logits is None:
             return 
         
-        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=False, tau=tau, dim=1)
+        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
         
     def forward(self, corr, kc):
         
@@ -150,6 +150,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             rep_mask_seqs = []
             for r in range(kwargs['n_train_samples']):
                 model.sample_A(tau)
+                
                 actual_kc = model._A[batch_kc_seqs] #th.matmul(kc, self._A) # B X T X LC
                 rep_obs_seqs.append(batch_obs_seqs)
                 rep_kc_seqs.append(actual_kc)
@@ -164,8 +165,17 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
 
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten()
                     
-            train_loss = train_loss[mask_ix].mean()
+            #train_loss = train_loss[mask_ix].mean()
+
             
+            train_losses = []
+            for kc in range(kwargs['n_latent_kcs']):
+                kc_ix = (final_kc_seq[:,:,kc] > 0).flatten().cpu()
+                #print(kc_ix.sum().item())
+                train_losses.append(train_loss[mask_ix & kc_ix].sum() / (1+kc_ix.sum()))
+            #print(train_losses)
+            train_loss = th.hstack(train_losses).mean()
+
             # for r in range(10):
             #     model.sample_A(tau)
                     

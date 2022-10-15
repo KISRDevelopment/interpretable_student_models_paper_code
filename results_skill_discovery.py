@@ -28,7 +28,7 @@ def main():
                 
                 pred_labels[i, :] = np.random.multinomial(1, A[i,:])
             pred_labels = np.argmax(pred_labels, axis=1)
-            print(pred_labels)
+            #print(pred_labels)
             cols['split'].append(s)
             cols['sample'].append(r)
             cols['rand'].append(sklearn.metrics.rand_score(actual_labels, pred_labels))
