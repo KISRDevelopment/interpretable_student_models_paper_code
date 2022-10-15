@@ -90,9 +90,9 @@ class BktModel(nn.Module):
 
         self._A = None
         
-    def sample_A(self, tau):
+    def sample_A(self, tau, hard_samples):
         
-        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
+        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=hard_samples, tau=tau, dim=1)
         
     def forward(self, corr, kc):
         actual_kc = self._A[kc]
@@ -140,9 +140,17 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             rep_obs_seqs = []
             rep_kc_seqs = []
             rep_mask_seqs = []
+            rep_utilized_kcs = []
             for r in range(kwargs['n_train_samples']):
-                model.sample_A(tau)
+                model.sample_A(tau, kwargs['hard_samples'])
                 
+                hard_A = nn.functional.gumbel_softmax(model.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
+        
+                n_utilized_kcs = hard_A.sum(0)
+                n_utilized_kcs /= (n_utilized_kcs + 1e-3)
+                
+                rep_utilized_kcs.append(n_utilized_kcs.sum().cpu())
+
                 actual_kc = model._A[batch_kc_seqs] #th.matmul(kc, self._A) # B X T X LC
                 rep_obs_seqs.append(batch_obs_seqs)
                 rep_kc_seqs.append(actual_kc)
@@ -154,8 +162,11 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             mask_ix = final_mask_seq.flatten()
 
             output = model.hmm(final_obs_seq, final_kc_seq).cpu()
-
-            train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten()
+            #print(rep_utilized_kcs)
+            n_utilized_kcs = th.hstack(rep_utilized_kcs).mean()
+            
+            train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() + \
+                kwargs['lambda'] * n_utilized_kcs / kwargs['n_latent_kcs']
                     
             train_loss = train_loss[mask_ix].mean()
 
@@ -176,21 +187,26 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         
         rand_index = 0
+
         if kwargs['ref_labels'] is not None:
             with th.no_grad():
                 ref_labels = kwargs['ref_labels']
                 indecies = []
+                n_utilized_kcs = []
                 for s in range(100):
-                    model.sample_A(1e-6)
+                    model.sample_A(1e-6, True)
+                    n_utilized_kcs.append((model._A.sum(0) > 0).sum().cpu().numpy())
                     pred_labels = th.argmax(model._A, dim=1).cpu().numpy()
                     rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
                     indecies.append(rand_index)
                 rand_index = np.mean(indecies)
+                n_utilized_kcs = np.mean(n_utilized_kcs)
 
         r = stopping_rule(auc_roc)
 
-        print("%4d Train loss: %8.4f, Valid AUC: %0.2f (Rand: %0.2f) %s" % (e, mean_train_loss, auc_roc, 
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f (Rand: %0.2f, Utilized KCS: %d) %s" % (e, mean_train_loss, auc_roc, 
             rand_index,
+            n_utilized_kcs,
             '***' if r['new_best'] else ''))
         
         if r['new_best']:
@@ -213,7 +229,7 @@ def predict(model, seqs, n_batch_seqs, device, n_samples):
             sample_ypred = []
             all_ytrue = []
 
-            model.sample_A(1e-6)
+            model.sample_A(1e-6, True)
             for offset in range(0, len(seqs), n_batch_seqs):
                 end = offset + n_batch_seqs
                 batch_seqs = seqs[offset:end]
@@ -289,7 +305,6 @@ def main(cfg, df, splits):
     results = []
     all_params = defaultdict(list)
 
-    splits = splits[[0],:]
     for s in range(splits.shape[0]):
         split = splits[s, :]
 

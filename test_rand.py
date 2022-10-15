@@ -2,8 +2,8 @@ import numpy as np
 import numpy.random as rng 
 import sklearn.metrics 
 
-n_skills = 5
-n_problems_per_skill = 40
+n_skills = 10
+n_problems_per_skill = 20
 n_problems = n_skills * n_problems_per_skill
 
 skill = np.repeat(np.arange(n_skills), n_problems_per_skill)

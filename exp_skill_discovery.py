@@ -31,7 +31,7 @@ def main():
         "epochs" : n_epochs, 
         "patience" : n_patience,
         "n_batch_seqs" : n_students // 10
-    }, df, splits[[0],:])
+    }, df, splits)
     baseline_results_df['model'] = 'baseline'
     baseline_results_df['n_latent_kcs'] = n_skills
     baseline_results_df['adj_rand_index'] = 1
@@ -50,13 +50,14 @@ def main():
             "tau" : 1.5,
             "n_latent_kcs" : n_latent_kcs,
             "n_valid_samples" : 10,
-            "n_train_samples" : 50,
+            "n_train_samples" : 10,
             "n_test_samples" : 50,
             "use_problems" : True,
-            "lambda" : 0.000,
-            "ref_labels" : actual_labels
+            "lambda" : 0.001,
+            "ref_labels" : actual_labels,
+            "hard_samples" : False
         }
-        results_df, _ = torch_bkt_skill_discovery.main(cfg, df, splits[[0],:])
+        results_df, _ = torch_bkt_skill_discovery.main(cfg, df, splits)
         results_df['n_latent_kcs'] = n_latent_kcs
         results_df['model'] = 'sd'
         
