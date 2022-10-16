@@ -79,11 +79,14 @@ class MultiHmmCell(jit.ScriptModule):
         return outputs
 
 class BktModel(nn.Module):
-    def __init__(self, n_kcs, n_latent_kcs):
+    def __init__(self, n_kcs, n_latent_kcs, n_initial_kcs):
         super(BktModel, self).__init__()
         
-        self.kc_membership_logits = nn.Embedding(n_kcs, n_latent_kcs)
-        
+        weight_matrix = th.rand((n_kcs, n_latent_kcs))
+        weight_matrix[:, n_initial_kcs:] = -10
+
+        self.kc_membership_logits = nn.Embedding.from_pretrained(weight_matrix, freeze=False)
+
         self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
         self.n_kcs = n_kcs
         self.n_latent_kcs = n_latent_kcs
@@ -118,7 +121,7 @@ def to_student_sequences(df):
 
 def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
 
-    model = BktModel(n_kcs, kwargs['n_latent_kcs'])
+    model = BktModel(n_kcs, kwargs['n_latent_kcs'], kwargs['n_initial_kcs'])
     model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
@@ -166,7 +169,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             n_utilized_kcs = th.hstack(rep_utilized_kcs).mean()
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() + \
-                kwargs['lambda'] * n_utilized_kcs / kwargs['n_latent_kcs']
+                kwargs['lambda'] * n_utilized_kcs
                     
             train_loss = train_loss[mask_ix].mean()
 
