@@ -33,6 +33,7 @@ def main():
             "learning_rate" : 0.2, 
             "epochs" : n_epochs, 
             "patience" : n_patience,
+            "patience_before_increasing_kcs" : n_patience // 2,
             "n_test_batch_seqs" : n_students,
             "n_batch_seqs" : n_students // 10,
             "tau" : 1.5,
@@ -42,7 +43,6 @@ def main():
             "n_train_samples" : 10,
             "n_test_samples" : 50,
             "use_problems" : True,
-            "lambda" : 0.01,
             "ref_labels" : actual_labels,
             "hard_samples" : False
         }
