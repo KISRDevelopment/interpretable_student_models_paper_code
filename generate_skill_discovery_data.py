@@ -5,8 +5,10 @@ from collections import defaultdict
 import split_dataset
 from scipy.stats import qmc
 import itertools
-def main(n_students, n_problems_per_skill, n_skills, no_bkt=False):
-    
+def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+
     # pI, pL, pF, pG, pS
     probs = np.random.rand(n_skills, 5)
     

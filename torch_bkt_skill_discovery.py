@@ -132,6 +132,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
         np.random.shuffle(train_seqs)
         losses = []
 
+        prev_n_utilized_kcs = kwargs['n_initial_kcs']
         for offset in range(0, len(train_seqs), n_batch_seqs):
             end = offset + n_batch_seqs
             batch_seqs = train_seqs[offset:end]
@@ -168,11 +169,9 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             #print(rep_utilized_kcs)
             n_utilized_kcs = th.hstack(rep_utilized_kcs).mean()
             
-            train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() + \
-                kwargs['lambda'] * n_utilized_kcs
-                    
-            train_loss = train_loss[mask_ix].mean()
-
+            train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
+             
+            train_loss = train_loss[mask_ix].mean() 
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
