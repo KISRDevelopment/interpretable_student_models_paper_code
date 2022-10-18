@@ -44,7 +44,8 @@ def main():
             "n_test_samples" : 50,
             "use_problems" : True,
             "ref_labels" : actual_labels,
-            "hard_samples" : False
+            "hard_samples" : False,
+            "lambda" : 0.00001
         }
         results_df, _ = torch_bkt_skill_discovery.main(cfg, df, splits)
         results_df['n_skills'] = n_skills

@@ -79,27 +79,23 @@ class MultiHmmCell(jit.ScriptModule):
         return outputs
 
 class BktModel(nn.Module):
-    def __init__(self, n_kcs, n_latent_kcs):
+    def __init__(self, n_kcs, n_latent_kcs, n_initial_kcs):
         super(BktModel, self).__init__()
         
-        self.kc_membership_logits = nn.Embedding(n_kcs, n_latent_kcs)
+        weight_matrix = th.rand((n_kcs, n_latent_kcs))
+        weight_matrix[:, n_initial_kcs:] = -10
+
+        self.kc_membership_logits = nn.Embedding.from_pretrained(weight_matrix, freeze=False)
 
         self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
         self.n_kcs = n_kcs
         self.n_latent_kcs = n_latent_kcs
 
         self._A = None
-        self._membership_mask = th.ones_like(self.kc_membership_logits.weight)
-
-    def set_n_latent_kcs(self, n_latent_kcs):
-        self._membership_mask[:] = 1
-        self._membership_mask[:,n_latent_kcs:] = 0
-
+        
     def sample_A(self, tau, hard_samples):
-        mask = self._membership_mask
-        weights = mask * self.kc_membership_logits.weight + (1-mask) * -10
-
-        self._A = nn.functional.gumbel_softmax(weights, hard=hard_samples, tau=tau, dim=1)
+        
+        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=hard_samples, tau=tau, dim=1)
         
     def forward(self, corr, kc):
         actual_kc = self._A[kc]
@@ -125,22 +121,18 @@ def to_student_sequences(df):
 
 def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
 
-    model = BktModel(n_kcs, kwargs['n_latent_kcs'])
+    model = BktModel(n_kcs, kwargs['n_latent_kcs'], kwargs['n_initial_kcs'])
     model.to(device)
-    model._membership_mask = model._membership_mask.to(device)
-
+    
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     
     best_state = None 
     best_rand_index = 0
-    n_latent_kcs = kwargs['n_initial_kcs']
-    prev_loss = None
     for e in range(epochs):
         np.random.shuffle(train_seqs)
         losses = []
-        
-        with th.no_grad():
-            model.set_n_latent_kcs(n_latent_kcs)
+
+        prev_n_utilized_kcs = kwargs['n_initial_kcs']
         for offset in range(0, len(train_seqs), n_batch_seqs):
             end = offset + n_batch_seqs
             batch_seqs = train_seqs[offset:end]
@@ -179,7 +171,8 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
              
-            train_loss = train_loss[mask_ix].mean() 
+            train_loss = train_loss[mask_ix].mean() + kwargs['lambda'] * n_utilized_kcs / kwargs['n_latent_kcs']
+
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
@@ -222,9 +215,6 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
         if r['new_best']:
             best_state = copy.deepcopy(model.state_dict())
             best_rand_index = rand_index
-        
-        if r['increase_n_skills']:
-            n_latent_kcs += 5
         
         if r['stop']:
             break
@@ -273,19 +263,17 @@ def predict(model, seqs, n_batch_seqs, device, n_samples):
 
     return ytrue, ypred
 
-def create_early_stopping_rule(patience, patience_before_increasing_kcs, min_perc_improvement):
+def create_early_stopping_rule(patience, min_perc_improvement):
 
     best_value = -np.inf 
     waited = 0
-    waited_since_last_kc_increase = 0
     def stop(value):
         nonlocal best_value
         nonlocal waited 
-        nonlocal waited_since_last_kc_increase
 
         if np.isinf(best_value):
             best_value = value
-            return { "stop" : False, "new_best" : True, "increase_n_skills" : False } 
+            return { "stop" : False, "new_best" : True } 
         
         perc_improvement = (value - best_value)*100/best_value
         new_best = False
@@ -297,18 +285,13 @@ def create_early_stopping_rule(patience, patience_before_increasing_kcs, min_per
         # otherwise continue increasing
         if perc_improvement > min_perc_improvement:
             waited = 0
-            waited_since_last_kc_increase = 0
         else:
             waited += 1
-            waited_since_last_kc_increase += 1
-
-        if waited_since_last_kc_increase >= patience_before_increasing_kcs:
-            waited_since_last_kc_increase = 0
-            return { "stop" : False, "new_best" : new_best, "increase_n_skills" : True }
-        if waited >= patience:
-            return { "stop" : True, "new_best" : new_best, "increase_n_skills" : False }
         
-        return { "stop" : False, "new_best" : new_best, "increase_n_skills" : False }
+        if waited >= patience:
+            return { "stop" : True, "new_best" : new_best }
+        
+        return { "stop" : False, "new_best" : new_best }
 
     return stop
 
@@ -347,7 +330,7 @@ def main(cfg, df, splits):
 
         tic = time.perf_counter()
 
-        stopping_rule = create_early_stopping_rule(cfg['patience'], cfg['patience_before_increasing_kcs'], cfg.get('min_perc_improvement', 0))
+        stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
 
         model, best_rand_index = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
