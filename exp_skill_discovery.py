@@ -1,6 +1,7 @@
 import numpy as np 
 import pandas as pd
 import torch_bkt_skill_discovery_advanced
+import torch_bkt_skill_discovery_alt2
 import generate_skill_discovery_data
 import split_dataset
 import os 
@@ -8,7 +9,7 @@ import torch_bkt_one_hot_kcs
 
 def main():
     
-    ns_skills = [20, 40, 80]
+    ns_skills = [80, 40, 80]
     
     n_latent_kcs = 100
     n_epochs = 1000
@@ -31,19 +32,22 @@ def main():
 
         cfg = {
             "learning_rate" : 0.1, 
-            "epochs" : 100, 
+            "epochs" : 15, 
             "patience" : 10,
             "tau" : 1,
-            "n_latent_kcs" : 50,
+            "n_latent_kcs" : 100,
             "n_valid_samples" : 10,
             "n_test_samples" : 50,
-            "lambda" : 0.0000000001,
-            "n_batch_seqs" : 100,
-            "n_test_batch_seqs" : 500,
+            "lambda" : 0.00,
+            "n_batch_seqs" : n_students // 10,
+            "n_test_batch_seqs" : n_students,
             "hard_samples" : False,
-            "ref_labels" : actual_labels
+            "ref_labels" : actual_labels,
+            "use_problems" : True,
+            "n_initial_kcs" : 50,
+            "n_train_samples" : 50
         }
-        results_df = torch_bkt_skill_discovery_advanced.main(cfg, df, splits)
+        results_df = torch_bkt_skill_discovery_alt2.main(cfg, df, splits)
         results_df['n_skills'] = n_skills
         results_df['model'] = 'sd'
         
