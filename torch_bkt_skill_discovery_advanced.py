@@ -15,6 +15,8 @@ from collections import defaultdict
 from torch.nn.utils.rnn import pad_sequence
 import copy 
 import json
+import sklearn.metrics
+
 class MultiHmmCell(jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs, n_chains, n_problems):
@@ -95,14 +97,21 @@ class BktModel(nn.Module):
     def __init__(self, n_problems, n_kcs):
         super(BktModel, self).__init__()
         self.n_kcs = n_kcs
+
+        n_initial_kcs = 2
+        weight_matrix = th.rand((n_problems, n_kcs))
+        weight_matrix[:, n_initial_kcs:] = -5
+
+        self.kc_membership_logits = nn.Embedding.from_pretrained(weight_matrix, freeze=False)
+
+
         self.hmm = MultiHmmCell(2, 2, n_kcs, n_problems)
-        self.kc_membership_logits = nn.Embedding(n_problems, n_kcs)
-    
+        
     def sample_A(self, tau, hard_samples):
         self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=hard_samples, tau=tau, dim=1)
         
-    def forward(self, corr, kc, problem):
-        kc = self._A[kc]
+    def forward(self, corr, problem):
+        kc = self._A[problem]
         return self.hmm(corr, kc, problem)
 
 def to_student_sequences(df):
@@ -124,10 +133,10 @@ def train(train_seqs, valid_seqs, n_problems, device, learning_rate, epochs, pat
     model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
-    best_val_auc_roc =  0.5
+    best_val_auc_roc =  0.
     best_state = None 
     epochs_since_last_best = 0
-
+    best_aux = {}
     for e in range(epochs):
         np.random.shuffle(train_seqs)
         losses = []
@@ -138,12 +147,11 @@ def train(train_seqs, valid_seqs, n_problems, device, learning_rate, epochs, pat
             batch_seqs = train_seqs[offset:end]
 
             batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             model.sample_A(kwargs['tau'], kwargs['hard_samples'])
         
-            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device), batch_problem_seqs.to(device)).cpu()
+            output = model(batch_obs_seqs.to(device), batch_problem_seqs.to(device)).cpu()
             
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
             mask_ix = batch_mask_seqs.flatten()
@@ -154,18 +162,19 @@ def train(train_seqs, valid_seqs, n_problems, device, learning_rate, epochs, pat
             hard_idx = th.argmax(model._A, dim=1)
             hard_A = th.zeros_like(model._A)
             hard_A[th.arange(hard_A.shape[0]), hard_idx] = 1
-            #hard_A = hard_A - model._A.detach() + model._A 
+            hard_A = hard_A - model._A.detach() + model._A 
             n_utilized_kcs = hard_A.sum(0)
             n_utilized_kcs /= (n_utilized_kcs + 1e-3)
-            print("Utilized KCS: %d" % n_utilized_kcs.sum().item())
+            
             kc_to_problem = model._A.T # K X P
             
 
             mu = (kc_to_problem[:,:,None,None] * model.hmm.obs_logits_problem[None,:,:,:]).sum(1) / (1e-6+kc_to_problem.sum(1, keepdim=True)[:,:,None])
-            var = (model.hmm.obs_logits_problem[:,None,:,:] - mu[None,:,:,:]).square().sum(0) # K X S X O
+            var = (model.hmm.obs_logits_problem[:,None,:,:] - mu[None,:,:,:]).square().sum(0) / (1e-6+kc_to_problem.sum(1, keepdim=True)[:,:,None]) # K X S X O
             #print(var.mean().item())
-            train_loss = train_loss[mask_ix].mean() + kwargs['lambda']*var.mean()
-
+            #train_loss = train_loss[mask_ix].mean() + kwargs['lambda']*var.mean() / n_utilized_kcs.sum()
+            train_loss = train_loss[mask_ix].mean() + kwargs['lambda']*var.mean()*th.log(n_utilized_kcs.sum())
+            
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
@@ -177,14 +186,37 @@ def train(train_seqs, valid_seqs, n_problems, device, learning_rate, epochs, pat
         #
         # Validation
         #
-        ytrue, ypred = predict(model, valid_seqs, n_batch_seqs, device)
+        ytrue, ypred = predict(model, valid_seqs, kwargs['n_test_batch_seqs'], device, kwargs['n_valid_samples'])
+
+        with th.no_grad():
+            ref_labels = kwargs['ref_labels']
+            indecies = []
+            n_utilized_kcs = []
+            for s in range(100):
+                model.sample_A(1e-6, True)
+                n_utilized_kcs.append((model._A.sum(0) > 0).sum().cpu().numpy())
+                pred_labels = th.argmax(model._A, dim=1).cpu().numpy()
+
+                if ref_labels is not None:
+                    rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
+                    indecies.append(rand_index)
+            rand_index = np.mean(indecies) if len(indecies) > 0 else 0
+            n_utilized_kcs = np.mean(n_utilized_kcs)
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
-        print("Train loss: %8.4f, Valid AUC: %0.2f" % (mean_train_loss, auc_roc))
+        new_best = auc_roc > best_val_auc_roc
+
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f (Rand: %0.2f, Utilized KCS: %d) %s" % (e, mean_train_loss, auc_roc, 
+            rand_index,
+            n_utilized_kcs,
+            '***' if new_best else ''))
+            
         if auc_roc > best_val_auc_roc:
             best_val_auc_roc = auc_roc
             epochs_since_last_best = 0
             best_state = copy.deepcopy(model.state_dict())
+            best_aux['rand_index'] = rand_index
+            best_aux['n_utilized_kcs'] = n_utilized_kcs
         else:
             epochs_since_last_best += 1
             
@@ -193,95 +225,53 @@ def train(train_seqs, valid_seqs, n_problems, device, learning_rate, epochs, pat
 
     model.load_state_dict(best_state)
 
-    return model
+    return model, best_aux
     
 
-def predict(model, seqs, n_batch_seqs, device):
+def predict(model, seqs, n_batch_seqs, device, n_samples):
     model.eval()
     with th.no_grad():
         all_ypred = []
-        all_ytrue = []
-        model.sample_A(1e-6, True)
-        for offset in range(0, len(seqs), n_batch_seqs):
-            end = offset + n_batch_seqs
-            batch_seqs = seqs[offset:end]
+        for sample in range(n_samples):
+            sample_ypred = []
+            all_ytrue = []
+            model.sample_A(1e-6, True)
+            for offset in range(0, len(seqs), n_batch_seqs):
+                end = offset + n_batch_seqs
+                batch_seqs = seqs[offset:end]
 
-            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
-            batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
-            
-            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device), batch_problem_seqs.to(device)).cpu()
+                batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
+                batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
+                batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
                 
-            ypred = output[:, :, 1].flatten()
-            ytrue = batch_obs_seqs.flatten()
-            mask_ix = batch_mask_seqs.flatten()
-                
-            ypred = ypred[mask_ix].numpy()
-            ytrue = ytrue[mask_ix].numpy()
+                output = model(batch_obs_seqs.to(device), batch_problem_seqs.to(device)).cpu()
+                    
+                ypred = output[:, :, 1].flatten()
+                ytrue = batch_obs_seqs.flatten()
+                mask_ix = batch_mask_seqs.flatten()
+                    
+                ypred = ypred[mask_ix].numpy()
+                ytrue = ytrue[mask_ix].numpy()
 
-            all_ypred.append(ypred)
-            all_ytrue.append(ytrue)
+                sample_ypred.append(ypred)
+                all_ytrue.append(ytrue)
             
-        ypred = np.hstack(all_ypred)
-        ytrue = np.hstack(all_ytrue)
+            sample_ypred = np.hstack(sample_ypred)
+            ytrue = np.hstack(all_ytrue)
+
+            all_ypred.append(sample_ypred)
+
+        ypred = np.mean(np.vstack(all_ypred), axis=0)
     model.train()
 
     return ytrue, ypred
 
         
 
-def main():
-    df = pd.read_csv("data/datasets/gervetetal_statics.csv")
-    n_problems = df['problem'].max() + 1
-    print("Problems: %d" % n_problems)
-    gdf = df.groupby('problem')['student'].count()
-    ix = gdf >= 100
-    print("Problems by at least 100: %d" % np.sum(ix))
-    
-    seqs = to_student_sequences(df)
-    
-    splits = np.load("data/splits/gervetetal_statics.npy")
-    split = splits[0, :]
 
-    train_ix = split == 2
-    valid_ix = split == 1
-    test_ix = split == 0
-
-    train_students = set(df[train_ix]['student'])
-    valid_students = set(df[valid_ix]['student'])
-    test_students = set(df[test_ix]['student'])
-
-    train_problems = set(df[train_ix]['problem'])
-    test_problems = set(df[test_ix]['problem'])
-    print("Problems in test but not in train: %d" % len(test_problems - train_problems))
-    
-    train_seqs = [seqs[s] for s in train_students]
-    valid_seqs = [seqs[s] for s in valid_students]
-    test_seqs = [seqs[s] for s in test_students]
-
-    model = train(train_seqs, 
-                  valid_seqs,
-                  n_problems,
-                  device='cuda:0', 
-                  learning_rate=0.5, 
-                  epochs=20, 
-                  patience=5,
-                  n_batch_seqs=500)
-
-    ytrue_test, ypred_test = predict(model, test_seqs, 500, 'cuda:0')
-    auc_roc = metrics.calculate_metrics(ytrue_test, ypred_test)['auc_roc']
-
-    print("Test auc: %0.2f" % (auc_roc))
-
-def main(cfg_path, dataset_name, output_path):
-    with open(cfg_path, 'r') as f:
-        cfg = json.load(f)
-    
-    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+def main(cfg, df, splits):
     n_problems = df['problem'].max() + 1
 
-    splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
     all_ytrue = []
@@ -306,16 +296,18 @@ def main(cfg_path, dataset_name, output_path):
         valid_seqs = [seqs[s] for s in valid_students]
         test_seqs = [seqs[s] for s in test_students]
 
-        model = train(train_seqs, valid_seqs, 
+        model, best_aux = train(train_seqs, valid_seqs, 
             n_problems=n_problems,
             device='cuda:0',
             **cfg)
 
-        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_batch_seqs'], 'cuda:0')
+        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_test_batch_seqs'], 'cuda:0', cfg['n_test_samples'])
         
         ypred_test = np.exp(log_ypred_test)
 
-        results.append(metrics.calculate_metrics(ytrue_test, ypred_test))
+        r = metrics.calculate_metrics(ytrue_test, ypred_test)
+        r = { **r, **best_aux }
+        results.append(r)
         all_ytrue.extend(ytrue_test)
         all_ypred.extend(ypred_test)
 
@@ -326,10 +318,21 @@ def main(cfg_path, dataset_name, output_path):
     results.append(overall_metrics)
 
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])] + ['Overall'])
-    print(results_df)
-
-    results_df.to_csv(output_path)
+    
+    return result_df
 
 if __name__ == "__main__":
     import sys
-    main(*sys.argv[1:])
+    cfg_path = sys.argv[1]
+    dataset_name = sys.argv[2]
+    output_path = sys.argv[3]
+
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
+
+    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    splits = np.load("data/splits/%s.npy" % dataset_name)
+    results_df = main(cfg, df, splits)
+
+    results_df.to_csv(output_path)
+
