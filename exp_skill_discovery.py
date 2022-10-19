@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import torch_bkt_skill_discovery_advanced
 import torch_bkt_skill_discovery_alt2
+import torch_bkt_skill_discovery
 import generate_skill_discovery_data
 import split_dataset
 import os 
@@ -9,11 +10,11 @@ import torch_bkt_one_hot_kcs
 
 def main():
     
-    ns_skills = [80, 40, 80]
+    ns_skills = [20, 40, 80]
     
     n_latent_kcs = 100
-    n_epochs = 1000
-    n_patience = 10
+    n_epochs = 100
+    n_patience = 5
     n_students = 500
     n_trials_per_student = 200
 
@@ -26,16 +27,16 @@ def main():
         df, probs, actual_labels = generate_skill_discovery_data.main(n_problems_per_skill=n_problems_per_skill, 
             n_students=n_students, 
             n_skills=n_skills,
-            seed=563453,
+            seed=675857,
             no_bkt=False)
         splits = split_dataset.main(df, 5, 5)
 
         cfg = {
             "learning_rate" : 0.1, 
-            "epochs" : 15, 
-            "patience" : 10,
-            "tau" : 1,
-            "n_latent_kcs" : 100,
+            "epochs" : n_epochs, 
+            "patience" : n_patience,
+            "tau" : 1.5,
+            "n_latent_kcs" : n_latent_kcs,
             "n_valid_samples" : 10,
             "n_test_samples" : 50,
             "lambda" : 0.00,
@@ -47,7 +48,7 @@ def main():
             "n_initial_kcs" : 50,
             "n_train_samples" : 50
         }
-        results_df = torch_bkt_skill_discovery_alt2.main(cfg, df, splits)
+        results_df,_ = torch_bkt_skill_discovery.main(cfg, df, splits)
         results_df['n_skills'] = n_skills
         results_df['model'] = 'sd'
         
@@ -61,8 +62,7 @@ def main():
         }, df, splits)
         baseline_results_df['model'] = 'baseline'
         baseline_results_df['n_skills'] = n_skills
-        baseline_results_df['adj_rand_index'] = 1
-
+        
         result_dfs.append(baseline_results_df)
         print(pd.concat(result_dfs, axis=0, ignore_index=True))
 

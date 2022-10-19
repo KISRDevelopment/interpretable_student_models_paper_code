@@ -148,13 +148,6 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             for r in range(kwargs['n_train_samples']):
                 model.sample_A(tau, kwargs['hard_samples'])
                 
-                hard_A = nn.functional.gumbel_softmax(model.kc_membership_logits.weight, hard=True, tau=tau, dim=1)
-        
-                n_utilized_kcs = hard_A.sum(0)
-                n_utilized_kcs /= (n_utilized_kcs + 1e-3)
-                
-                rep_utilized_kcs.append(n_utilized_kcs.sum().cpu())
-
                 actual_kc = model._A[batch_kc_seqs] #th.matmul(kc, self._A) # B X T X LC
                 rep_obs_seqs.append(batch_obs_seqs)
                 rep_kc_seqs.append(actual_kc)
@@ -166,12 +159,10 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             mask_ix = final_mask_seq.flatten()
 
             output = model.hmm(final_obs_seq, final_kc_seq).cpu()
-            #print(rep_utilized_kcs)
-            n_utilized_kcs = th.hstack(rep_utilized_kcs).mean()
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
              
-            train_loss = train_loss[mask_ix].mean() + kwargs['lambda'] * n_utilized_kcs / kwargs['n_latent_kcs']
+            train_loss = train_loss[mask_ix].mean()
 
             optimizer.zero_grad()
             train_loss.backward()
@@ -214,14 +205,16 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
         
         if r['new_best']:
             best_state = copy.deepcopy(model.state_dict())
-            best_rand_index = rand_index
-        
+            best_aux = {
+                "rand_index" : rand_index,
+                "n_utilized_kcs" : n_utilized_kcs
+            }
         if r['stop']:
             break
 
     model.load_state_dict(best_state)
 
-    return model, best_rand_index
+    return model, best_aux
     
 
 def predict(model, seqs, n_batch_seqs, device, n_samples):
@@ -332,7 +325,7 @@ def main(cfg, df, splits):
 
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
 
-        model, best_rand_index = train(train_seqs, valid_seqs, 
+        model, best_aux = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
             device='cuda:0',
             stopping_rule=stopping_rule,
@@ -352,7 +345,7 @@ def main(cfg, df, splits):
         
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         run_result['time_diff_sec'] = toc - tic 
-        run_result['adj_rand_index'] = best_rand_index
+        run_result = { **run_result , **best_aux }
         
         results.append(run_result)
         all_ytrue.extend(ytrue_test)
