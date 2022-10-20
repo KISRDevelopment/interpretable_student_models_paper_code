@@ -216,12 +216,8 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 
     return stop
 
-def main(cfg_path, dataset_name, output_path):
-    with open(cfg_path, 'r') as f:
-        cfg = json.load(f)
+def main(cfg, df, splits):
     
-    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
-    splits = np.load("data/splits/%s.npy" % dataset_name)
     seqs = to_student_sequences(df)
     
     all_ytrue = []
@@ -287,11 +283,23 @@ def main(cfg_path, dataset_name, output_path):
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])] + ['Overall'])
     print(results_df)
 
+    return results_df, all_params
+    
+
+if __name__ == "__main__":
+    import sys
+    cfg_path = sys.argv[1]
+    dataset_name = sys.argv[2]
+    output_path = sys.argv[3]
+
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
+
+    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    splits = np.load("data/splits/%s.npy" % dataset_name)
+    results_df, all_params = main(cfg, df, splits)
+
     results_df.to_csv(output_path)
 
     param_output_path = output_path.replace(".csv", ".params.npy")
     np.savez(param_output_path, **all_params)
-
-if __name__ == "__main__":
-    import sys
-    main(*sys.argv[1:])

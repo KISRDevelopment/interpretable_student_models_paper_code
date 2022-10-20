@@ -230,7 +230,7 @@ def create_early_stopping_rule(patience, min_perc_improvement):
     return stop
 
 def main(cfg, df, splits):
-    
+    print("# KCS: %d" % np.unique(df['skill']).shape[0])
     seqs = to_student_sequences(df)
     
     all_ytrue = []

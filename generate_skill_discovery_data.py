@@ -10,7 +10,15 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
         np.random.seed(seed)
 
     # pI, pL, pF, pG, pS
-    probs = np.random.rand(n_skills, 5)
+    pIs = np.linspace(0, 1, 5)
+    pLs = pIs 
+    pFs = pIs
+    pGs = np.array([0, 0.1, 0.2, 0.3, 0.4])
+    pSs = np.array([0, 0.1, 0.2, 0.3, 0.4])
+    all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
+    
+    probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=False, size=n_skills), :]
+    
     
     # generate assignments
     kcs = np.repeat(np.arange(n_skills), (n_problems_per_skill,))
@@ -18,13 +26,12 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
     A = np.zeros(problems.shape[0],dtype=int)
     A[problems] = kcs 
     
-    np.savez("data/skill_discovery_data_params.npz", probs=probs, A=A)
-
     print("Dataset size: %d students" % n_students)
          
     # generate trials
     cols = defaultdict(list)
     
+    n_state = 0
     for s in range(n_students):
 
         # initialize state (n_skills,)
@@ -43,11 +50,11 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
             # get p(correct|state)
             if kc_state == 1:
                 pC = 1-pS
+                n_state += 1
             else:
                 pC = pG
             
-            if no_bkt:
-                pC = pG
+            
             ans = rng.binomial(1, pC)
             cols["student"].append(s)
             cols["correct"].append(ans)
@@ -58,17 +65,12 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
             if kc_state == 0:
                 state[kc] = rng.binomial(1, pL)
             else:
-                state[kc] = 1 - rng.binomial(1, pF)
-        
+                state[kc] = rng.binomial(1, 1-pF)
+
     df = pd.DataFrame(cols)
         
     print(np.mean(df['correct']))
 
-    # dataset_name = "sd_%d" % n_students
-    # df.to_csv("data/datasets/%s.csv" % dataset_name, index=False)
-    # split_dataset.main("data/datasets/%s.csv" % dataset_name, 
-    #     "data/splits/%s.npy" % dataset_name, 5, 5)
-    
     return df, probs, A 
 
 if __name__ == "__main__":
