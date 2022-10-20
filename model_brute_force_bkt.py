@@ -12,14 +12,8 @@ import itertools
 from numba.typed import List
 import time 
 
-def main():
-    input_path = sys.argv[1]
-    split_path = sys.argv[2]
-    output_path = sys.argv[3]
-
-    master_df = pd.read_csv(sys.argv[1])
-
-    splits = np.load(split_path)
+def main(master_df, splits):
+    
 
     results = []
     param_dfs = []
@@ -78,13 +72,14 @@ def main():
         param_dfs.append(params_df)
     
 
-    params_path = output_path.replace('.csv','.params.csv')
-    pd.concat(param_dfs, axis=0, ignore_index=True).to_csv(params_path, index=False)
-        
+    
+    params_df = pd.concat(param_dfs, axis=0, ignore_index=True)
 
     results_df = pd.DataFrame(results)
-    print(results_df)
-    results_df.to_csv(output_path, index=False)
+    #print(results_df)
+    #results_df.to_csv(output_path, index=False)
+
+    return result_df, params_df 
 
 def prepare(df):
     """ prepares data to be fitted by multiple BKT models, one per skill """
@@ -196,9 +191,19 @@ def test_bkt(params, seqs_by_skill):
 
 if __name__ == "__main__":
     main()
+    input_path = sys.argv[1]
+    split_path = sys.argv[2]
+    output_path = sys.argv[3]
 
-    # probs = forward_bkt(np.array([[0, 1], [1, 1], [2, 0], [3, 1]]), 0.2, 0.2, 0.2, 0.2, 0.2)
-    # print(probs)
-    # probs = forward_bkt_python([[0, 1], [1,1], [2, 0], [3, 1]], 0.2, 0.2, 0.2, 0.2, 0.2)
-    # print(probs)
-    #print(search_space)
+    master_df = pd.read_csv(input_path)
+
+    splits = np.load(split_path)
+
+    results_df, params_df = main(master_df, splits)
+
+    params_path = output_path.replace('.csv','.params.csv')
+    params_df.to_csv(params_path, index=False)
+
+    results_df = pd.DataFrame(results)
+    #print(results_df)
+    results_df.to_csv(output_path, index=False)

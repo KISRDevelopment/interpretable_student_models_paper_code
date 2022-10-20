@@ -10,7 +10,7 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
         np.random.seed(seed)
 
     # pI, pL, pF, pG, pS
-    pIs = np.linspace(0, 1, 5)
+    pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
     pLs = pIs 
     pFs = pIs
     pGs = np.array([0, 0.1, 0.2, 0.3, 0.4])
@@ -18,7 +18,6 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
     all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
     
     probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=False, size=n_skills), :]
-    
     
     # generate assignments
     kcs = np.repeat(np.arange(n_skills), (n_problems_per_skill,))
@@ -39,11 +38,11 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
         
         # generate problem sequence
         problem_seq = np.random.permutation(problems.shape[0])
-
+        
         for t in range(problem_seq.shape[0]):
             problem = problem_seq[t]
             kc = A[problem]
-
+            
             kc_state = state[kc]
             _, pL, pF, pG, pS = probs[kc, :]
                 

@@ -8,6 +8,7 @@ import split_dataset
 import os 
 import torch_bkt_one_hot_kcs 
 import torch_bkt
+import model_brute_force_bkt
 def main():
     
     ns_skills = [5, 25, 50, 100]
@@ -30,7 +31,7 @@ def main():
             seed=758765,
             no_bkt=False)
         splits = split_dataset.main(df, 5, 5)
-
+        """
         cfg = {
             "learning_rate" : 0.1, 
             "epochs" : n_epochs, 
@@ -54,7 +55,7 @@ def main():
         results_df['model'] = 'sd'
         
         result_dfs.append(results_df)
-        
+        """
         baseline_results_df, _ = torch_bkt.main({
             "learning_rate" : 0.5, 
             "epochs" : n_epochs, 
@@ -67,19 +68,20 @@ def main():
         result_dfs.append(baseline_results_df)
         
         
-        df['skill'] = df['problem']
+        df['skill'] = df['problem'].tolist()
         no_sd_results_df, _ = torch_bkt.main({
             "learning_rate" : 0.5, 
             "epochs" : n_epochs, 
             "patience" : n_patience,
             "n_batch_seqs" : n_students // 10
         }, df, splits)
+        #no_sd_results_df, _ = model_brute_force_bkt.main(df, splits)
         no_sd_results_df['model'] = 'no_sd'
         no_sd_results_df['n_skills'] = n_skills
         result_dfs.append(no_sd_results_df)
         
         print(pd.concat(result_dfs, axis=0, ignore_index=True))
-        
+        exit()
 
     result_df = pd.concat(result_dfs, axis=0, ignore_index=True)
     result_df.to_csv("tmp/result-exp-skill-discovery.csv", index=False)
