@@ -277,10 +277,10 @@ def main(cfg, df, splits):
     all_ytrue = np.array(all_ytrue)
     all_ypred = np.array(all_ypred)
 
-    overall_metrics = metrics.calculate_metrics(all_ytrue, all_ypred)
-    results.append(overall_metrics)
+    # overall_metrics = metrics.calculate_metrics(all_ytrue, all_ypred)
+    # results.append(overall_metrics)
 
-    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])] + ['Overall'])
+    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
     print(results_df)
 
     return results_df, all_params

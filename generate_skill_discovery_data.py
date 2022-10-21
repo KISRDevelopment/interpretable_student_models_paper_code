@@ -13,11 +13,12 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
     pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
     pLs = pIs 
     pFs = pIs
-    pGs = np.array([0, 0.1, 0.2, 0.3, 0.4])
-    pSs = np.array([0, 0.1, 0.2, 0.3, 0.4])
+    pGs = np.array([0.1, 0.2, 0.3, 0.4])
+    pSs = np.array([0.1, 0.2, 0.3, 0.4])
     all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
-    
+    print("Choosing from %d combinations" % all_prob_combs.shape[0])
     probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=False, size=n_skills), :]
+    print(probs)
     
     # generate assignments
     kcs = np.repeat(np.arange(n_skills), (n_problems_per_skill,))

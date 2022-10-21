@@ -15,10 +15,9 @@ def main():
     
     n_latent_kcs = 100
     n_epochs = 100
-    n_patience = 5
+    n_patience = 10
     n_students = 500
     n_trials_per_student = 200
-
 
     result_dfs = []
 
@@ -28,43 +27,46 @@ def main():
         df, probs, actual_labels = generate_skill_discovery_data.main(n_problems_per_skill=n_problems_per_skill, 
             n_students=n_students, 
             n_skills=n_skills,
-            seed=758765,
+            seed=41,
             no_bkt=False)
         splits = split_dataset.main(df, 5, 5)
-        """
+        
         cfg = {
             "learning_rate" : 0.1, 
             "epochs" : n_epochs, 
             "patience" : n_patience,
             "tau" : 1.5,
             "n_latent_kcs" : n_latent_kcs,
-            "n_valid_samples" : 10,
-            "n_test_samples" : 50,
             "lambda" : 0.00,
             "n_batch_seqs" : n_students // 10,
             "n_test_batch_seqs" : n_students,
             "hard_samples" : False,
             "ref_labels" : actual_labels,
             "use_problems" : True,
-            "n_initial_kcs" : 50,
-            "n_train_samples" : 50
+            "n_initial_kcs" : 5,
+            "n_valid_samples" : 50,
+            "n_test_samples" : 50,
+            "n_train_samples" : 10
         }
-        
         results_df,_ = torch_bkt_skill_discovery.main(cfg, df, splits)
         results_df['n_skills'] = n_skills
         results_df['model'] = 'sd'
-        
         result_dfs.append(results_df)
-        """
+        
+        cfg['n_initial_kcs'] = n_skills
+        results_df,_ = torch_bkt_skill_discovery.main(cfg, df, splits)
+        results_df['n_skills'] = n_skills
+        results_df['model'] = 'sd-initialized'
+        result_dfs.append(results_df)
+
         baseline_results_df, _ = torch_bkt.main({
-            "learning_rate" : 0.5, 
+            "learning_rate" : 0.1, 
             "epochs" : n_epochs, 
             "patience" : n_patience,
             "n_batch_seqs" : n_students // 10
         }, df, splits)
         baseline_results_df['model'] = 'baseline'
         baseline_results_df['n_skills'] = n_skills
-        
         result_dfs.append(baseline_results_df)
         
         
@@ -75,13 +77,12 @@ def main():
             "patience" : n_patience,
             "n_batch_seqs" : n_students // 10
         }, df, splits)
-        #no_sd_results_df, _ = model_brute_force_bkt.main(df, splits)
         no_sd_results_df['model'] = 'no_sd'
         no_sd_results_df['n_skills'] = n_skills
         result_dfs.append(no_sd_results_df)
         
         print(pd.concat(result_dfs, axis=0, ignore_index=True))
-        exit()
+        
 
     result_df = pd.concat(result_dfs, axis=0, ignore_index=True)
     result_df.to_csv("tmp/result-exp-skill-discovery.csv", index=False)
