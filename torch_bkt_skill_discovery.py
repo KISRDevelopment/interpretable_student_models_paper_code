@@ -169,6 +169,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             optimizer.step()
 
             losses.append(train_loss.item())
+            print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / n_batch_seqs )))
         # tau = np.maximum(0.5, tau * 0.95)
         # print("new tau: %0.2f" % tau)
         mean_train_loss = np.mean(losses)
@@ -181,20 +182,21 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         
         rand_index = 0
-
-        if kwargs['ref_labels'] is not None:
-            with th.no_grad():
-                ref_labels = kwargs['ref_labels']
-                indecies = []
-                n_utilized_kcs = []
-                for s in range(100):
-                    model.sample_A(1e-6, True)
-                    n_utilized_kcs.append((model._A.sum(0) > 0).sum().cpu().numpy())
+        n_utilized_kcs = 0
+        with th.no_grad():
+            ref_labels = kwargs['ref_labels']
+            indecies = []
+            n_utilized_kcs = []
+            for s in range(100):
+                model.sample_A(1e-6, True)
+                n_utilized_kcs.append((model._A.sum(0) > 0).sum().cpu().numpy())
+                if ref_labels is not None:
                     pred_labels = th.argmax(model._A, dim=1).cpu().numpy()
                     rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
                     indecies.append(rand_index)
+            if ref_labels is not None:
                 rand_index = np.mean(indecies)
-                n_utilized_kcs = np.mean(n_utilized_kcs)
+            n_utilized_kcs = np.mean(n_utilized_kcs)
 
         r = stopping_rule(auc_roc)
 

@@ -2,8 +2,8 @@ import numpy as np
 import numpy.random as rng 
 import sklearn.metrics 
 
-n_skills = 10
-n_problems_per_skill = 20
+n_skills = 5
+n_problems_per_skill = 40
 n_problems = n_skills * n_problems_per_skill
 
 skill = np.repeat(np.arange(n_skills), n_problems_per_skill)
@@ -11,7 +11,7 @@ problem = rng.permutation(n_problems)
 actual_label = np.zeros(problem.shape[0],dtype=int)
 actual_label[problem] = skill 
 
-corruption_rates = np.linspace(0, 1, 11)
+corruption_rates = np.linspace(0, 1, 21)
 for rate in corruption_rates:
 
     n_problms_to_corrupt = int(rate * problem.shape[0])

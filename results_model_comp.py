@@ -36,9 +36,33 @@ def main(path):
 
     reported_df = load_reported_results()
     df = load_results(path)
+    df = df[df['split'] != 'Overall']
     df = pd.concat((df, reported_df), axis=0, ignore_index=True)
     df.to_csv("tmp/results-model-comp.csv", index=False)
     print(df)
+    print(set(df['dataset']))
+def load_results(path):
+
+    files = glob.glob(path + "/*.csv")
+
+    dfs = []
+    for file in files:
+        if '.params' in file:
+            continue
+        parts = os.path.basename(file).replace('.csv','').split('_')
+        model, dataset = parts[0], '_'.join(parts[1:])
+        df = pd.read_csv(file)
+        df['model'] = model 
+        df['dataset'] = dataset.replace('gervetetal_','')
+
+        dfs.append(df)
+    
+    df = pd.concat(dfs, axis=0, ignore_index=True)
+    df.rename(columns={
+        'Unnamed: 0' : 'split'
+    }, inplace=True)
+
+    return df
 
 def load_reported_results(n_splits=5):
     df = pd.read_csv("reported_results_gervetetal.csv")
