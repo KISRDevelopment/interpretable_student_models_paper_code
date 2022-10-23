@@ -230,7 +230,7 @@ def main(cfg_path, dataset_name, output_path):
         cfg = json.load(f)
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
-    
+    print("Students: %d" % len(set(df['student'])))
     splits = np.load("data/splits/%s.npy" % dataset_name)
 
     all_ytrue = []

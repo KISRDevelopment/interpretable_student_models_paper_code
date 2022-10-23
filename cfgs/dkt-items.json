@@ -1,7 +1,7 @@
 {
     "n_hidden" : 100,
     "epochs" : 100, 
-    "n_batch_seqs" : 100, 
+    "n_batch_seqs" : 50, 
     "n_batch_trials" : 50, 
     "learning_rate" : 0.01,
     "patience" : 10,
