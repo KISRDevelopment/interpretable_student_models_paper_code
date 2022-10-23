@@ -14,7 +14,7 @@ class DKTModel(nn.Module):
         self.n_kcs = n_kcs 
         self.n_items = n_items
         self.cell = nn.LSTM(2 * n_kcs, n_hidden, num_layers=1, batch_first=True)
-        self.item_embd = nn.Embedding(n_items, n_hidden)
+        self.item_embd = nn.Embedding.from_pretrained(th.zeros(n_items, n_hidden), freeze=False)
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, cell_input, curr_item, state=None):
@@ -37,7 +37,7 @@ class DKTModel(nn.Module):
 
         item_embedding = self.item_embd(curr_item) # [n_batch, t, n_hidden]
         
-        logits = (item_embedding * cell_output).sum(dim=2) # [n_batch, t]
+        logits = (item_embedding + cell_output).sum(dim=2) # [n_batch, t]
         
         return logits, last_state
 
