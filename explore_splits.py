@@ -25,9 +25,9 @@ def main():
         summaries.append(summary_df)
     
     final_summary = pd.concat(summaries, axis=1).T
-    #final_summary['perc_problems_novel'] = final_summary['novel_test_problems'] / final_summary['test_problems']
     print(final_summary)
-
+    final_summary.to_csv("tmp/splits_summary.csv", index=False)
+    
 def explore(df, splits):
     
     results = defaultdict(list)
@@ -50,6 +50,8 @@ def explore(df, splits):
         
         results['students'].append(len(set(df['student'])))
         results['skills'].append(len(set(df['skill'])))
+        results['problems'].append(len(set(df['problem'])))
+
         results['train_problems'].append(len(train_problems))
         results['test_problems'].append(len(test_problems))
         

@@ -1,6 +1,9 @@
 {
-    "learning_rate" : 0.5, 
-    "epochs" : 100, 
-    "patience" : 10,
-    "n_batch_seqs" : 500
+    "learning_rate" : 0.1, 
+    "epochs" : 20, 
+    "patience" : 5,
+    "p_train_batch_seqs" : 0.1,
+    "n_max_train_batch_seqs" : 200,
+    "p_test_batch_seqs" : 0.5,
+    "n_max_test_batch_seqs" : 500
 }

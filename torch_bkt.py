@@ -95,7 +95,7 @@ def to_student_sequences(df):
         seqs[r.student]["kc"].append(r.skill)
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule,**kwargs):
+def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, stopping_rule, **kwargs):
 
     model = BktModel(n_kcs)
     model.to(device)
@@ -104,6 +104,8 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
     
     best_state = None 
     
+    n_batch_seqs = kwargs['n_train_batch_seqs']
+    n_valid_seqs = kwargs['n_valid_batch_seqs']
     for e in range(epochs):
         np.random.shuffle(train_seqs)
         losses = []
@@ -112,11 +114,12 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             end = offset + n_batch_seqs
             batch_seqs = train_seqs[offset:end]
 
-            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
+            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
+            batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
-
-            output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
+            batch_mask_seqs = batch_mask_seqs.to(device)
+            
+            output = model(batch_obs_seqs, batch_kc_seqs)
             
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
             mask_ix = batch_mask_seqs.flatten()
@@ -134,15 +137,16 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
         #
         # Validation
         #
-        ytrue, ypred = predict(model, valid_seqs, n_batch_seqs, device)
+        ytrue, ypred = predict(model, valid_seqs, n_valid_seqs, device)
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
-        print("%4d Train loss: %8.4f, Valid AUC: %0.2f" % (e, mean_train_loss, auc_roc))
-        
+
         r = stopping_rule(auc_roc)
 
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if r['new_best'] else ''))
+        
         if r['new_best']:
-            print("=== New best")
+            
             best_state = copy.deepcopy(model.state_dict())
         
         if r['stop']:
@@ -155,6 +159,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
 
 def predict(model, seqs, n_batch_seqs, device):
     model.eval()
+    seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
     with th.no_grad():
         all_ypred = []
         all_ytrue = []
@@ -250,13 +255,22 @@ def main(cfg, df, splits):
 
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
 
-        model = train(train_seqs, valid_seqs, 
+        n_train_batch_seqs = compute_n_batch_seq(train_seqs, *cfg['train_batch_seqs'])
+        n_valid_batch_seqs = compute_n_batch_seq(valid_seqs, *cfg['test_batch_seqs'])
+        
+        print("Train batch size: %d, valid: %d" % (n_train_batch_seqs, n_valid_batch_seqs))
+        model = train(train_seqs, 
+            valid_seqs, 
             n_kcs=n_kcs, 
             device='cuda:0',
             stopping_rule=stopping_rule,
+            n_train_batch_seqs=n_train_batch_seqs,
+            n_valid_batch_seqs=n_valid_batch_seqs,
             **cfg)
 
-        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_batch_seqs'], 'cuda:0')
+        n_test_batch_seqs = compute_n_batch_seq(test_seqs, *cfg['test_batch_seqs'])
+        print("Test batch size: %d" % n_test_batch_seqs)
+        ytrue_test, log_ypred_test = predict(model, test_seqs, n_test_batch_seqs, 'cuda:0')
         toc = time.perf_counter()
 
         ypred_test = np.exp(log_ypred_test)
@@ -285,6 +299,10 @@ def main(cfg, df, splits):
 
     return results_df, all_params
     
+def compute_n_batch_seq(seqs, p, minval, maxval):
+    n_seqs = len(seqs)
+    b = int(n_seqs * p)
+    return max(minval, min(maxval, b))
 
 if __name__ == "__main__":
     import sys
