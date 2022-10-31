@@ -49,6 +49,7 @@ def explore(df, splits):
         novel_test_problems = test_problems - train_problems
         
         results['students'].append(len(set(df['student'])))
+        results['skills'].append(len(set(df['skill'])))
         results['train_problems'].append(len(train_problems))
         results['test_problems'].append(len(test_problems))
         
@@ -56,7 +57,7 @@ def explore(df, splits):
         results['p_novel_trials'] = n_trials_with_novel_problem / test_df.shape[0]
 
         results['p_novel_problems'] = len(novel_test_problems) / len(test_problems)
-
+        results['p_novel_skills'] = len(set(test_df['skill']) - set(train_df['skill'])) / len(set(test_df['skill']))
         gdf = test_df.groupby('student')['skill'].agg('count')
         results['med_seq_len'] = np.median(gdf)
         
