@@ -122,7 +122,7 @@ def to_student_sequences(df):
 def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
 
     model = BktModel(n_kcs, kwargs['n_latent_kcs'], kwargs['n_initial_kcs'])
-    model.to(device)
+    model = model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     
@@ -153,12 +153,12 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
                 rep_kc_seqs.append(actual_kc)
                 rep_mask_seqs.append(batch_mask_seqs)
             
-            final_obs_seq = th.vstack(rep_obs_seqs)
-            final_kc_seq = th.vstack(rep_kc_seqs)
-            final_mask_seq = th.vstack(rep_mask_seqs)
+            final_obs_seq = th.vstack(rep_obs_seqs).to(device)
+            final_kc_seq = th.vstack(rep_kc_seqs).to(device)
+            final_mask_seq = th.vstack(rep_mask_seqs).to(device)
             mask_ix = final_mask_seq.flatten()
 
-            output = model.hmm(final_obs_seq, final_kc_seq).cpu()
+            output = model.hmm(final_obs_seq, final_kc_seq)
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
              
@@ -221,7 +221,9 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
 
 def predict(model, seqs, n_batch_seqs, device, n_samples):
     model.eval()
+    seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
     with th.no_grad():
+
         all_ypred = []
         for sample in range(n_samples):
             sample_ypred = []

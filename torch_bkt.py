@@ -98,7 +98,7 @@ def to_student_sequences(df):
 def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, stopping_rule, **kwargs):
 
     model = BktModel(n_kcs)
-    model.to(device)
+    model = model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     
@@ -118,7 +118,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, stopping
             batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             batch_mask_seqs = batch_mask_seqs.to(device)
-            
+
             output = model(batch_obs_seqs, batch_kc_seqs)
             
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
