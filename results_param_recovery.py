@@ -1,9 +1,8 @@
 import numpy as np 
 import pandas as pd 
 from collections import defaultdict
-import matplotlib.pyplot as plt 
 
-def main():
+def main(input_dir, output_path):
 
     actual_params = "data/perf_data_probs.npy"
     actual_params = np.load(actual_params)
@@ -14,13 +13,13 @@ def main():
 
     dfs = []
     for n_students in ns_students:
-        diffs_by_kc = get_torch_bkt_probs("data/results-perf/torch-bkt_perf_%d.params.npy.npz" % n_students, actual_params)
+        diffs_by_kc = get_torch_bkt_probs("%s/torch-bkt_perf_%d.params.npy.npz" % (input_dir, n_students), actual_params)
         df = reshape_df(diffs_by_kc)
         df['model'] = 'torch-bkt'
         df['n_students'] = n_students
         dfs.append(df)
 
-        diffs_by_kc = get_brute_force_bkt_probs("data/results-perf/bkt-brute-force_perf_%d.params.csv" % n_students, actual_params)
+        diffs_by_kc = get_brute_force_bkt_probs("%s/bkt-brute-force_perf_%d.params.csv" % (input_dir, n_students), actual_params)
         df = reshape_df(diffs_by_kc)
         df['model'] = 'brute-force-bkt'
         df['n_students'] = n_students
@@ -28,7 +27,7 @@ def main():
     
     df = pd.concat(dfs, axis=0, ignore_index=True)
     
-    df.to_csv("tmp/results_param_recovery.csv", index=False)
+    df.to_csv(output_path, index=False)
 def reshape_df(diffs_by_kc):
     
     n_kcs, n_folds, _ = diffs_by_kc.shape
@@ -86,4 +85,5 @@ def get_torch_bkt_probs(params_path, actual_params):
     return diffs_by_kc
     
 if __name__ == "__main__":
-    main()
+    import sys 
+    main(sys.argv[1], sys.argv[2])

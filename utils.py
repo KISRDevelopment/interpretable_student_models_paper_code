@@ -1,4 +1,3 @@
-import tensorflow as tf
 import itertools
 import json
 import numpy as np

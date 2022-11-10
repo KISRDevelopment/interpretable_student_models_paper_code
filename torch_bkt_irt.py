@@ -158,7 +158,7 @@ def to_student_sequences(df):
     
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, n_problems, device, learning_rate, epochs, patience, n_batch_seqs, n_abilities, min_ability, max_ability):
+def train(train_seqs, valid_seqs, n_kcs, n_problems, device, learning_rate, epochs, patience, n_batch_seqs, n_abilities, min_ability, max_ability, **kwargs):
 
     model = BktModel(n_kcs, n_problems, n_abilities, min_ability, max_ability)
     model.to(device)

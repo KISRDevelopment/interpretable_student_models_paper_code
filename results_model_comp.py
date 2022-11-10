@@ -1,14 +1,12 @@
 import numpy as np 
 import pandas as pd 
-import seaborn as sns 
-import matplotlib.pyplot as plt 
 import glob 
 import os 
 
-def main(path):
+def main(path, output_path):
 
     df = load_results(path)
-    df.to_csv("tmp/results-model-comp.csv", index=False)
+    df.to_csv(output_path, index=False)
     print(df)
 
 def load_results(path):
@@ -36,6 +34,6 @@ def load_results(path):
 
 if __name__ == "__main__":
     import sys
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2])
 
 

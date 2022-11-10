@@ -22,7 +22,7 @@ for dataset in datasets:
     subprocess.call(['python', "model_brute_force_bkt.py",  dataset_path, splits_path, output_path])
 
 cfg_name = 'torch-bkt-fast'
-cfg_path = "cfgs/bkt-pytorch-fast.json"
+cfg_path = "cfgs/bkt-impatient.json"
 model_script = "torch_bkt.py"
 
 for dataset in datasets:
