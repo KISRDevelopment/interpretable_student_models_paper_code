@@ -1,5 +1,5 @@
 #
-#   Bayesian Knowledge Tracing PyTorch Implementation
+#   Neural BKT with problem effects
 #
 
 import numpy as np
@@ -102,7 +102,7 @@ def to_student_sequences(df):
     
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, n_problems, device, learning_rate, epochs, patience, n_batch_seqs):
+def train(train_seqs, valid_seqs, n_kcs, n_problems, device, learning_rate, epochs, patience, n_batch_seqs, **kwargs):
 
     model = BktModel(n_kcs, n_problems)
     model.to(device)

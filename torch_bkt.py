@@ -1,5 +1,5 @@
 #
-#   Bayesian Knowledge Tracing PyTorch Implementation
+#   Neural BKT
 #
 
 import numpy as np
@@ -255,8 +255,8 @@ def main(cfg, df, splits):
 
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
 
-        n_train_batch_seqs = compute_n_batch_seq(train_seqs, *cfg['train_batch_seqs'])
-        n_valid_batch_seqs = compute_n_batch_seq(valid_seqs, *cfg['test_batch_seqs'])
+        n_train_batch_seqs = cfg['n_batch_seqs']
+        n_valid_batch_seqs = cfg['n_test_batch_seqs']
         
         print("Train batch size: %d, valid: %d" % (n_train_batch_seqs, n_valid_batch_seqs))
         model = train(train_seqs, 
@@ -268,7 +268,7 @@ def main(cfg, df, splits):
             n_valid_batch_seqs=n_valid_batch_seqs,
             **cfg)
 
-        n_test_batch_seqs = compute_n_batch_seq(test_seqs, *cfg['test_batch_seqs'])
+        n_test_batch_seqs = cfg['n_test_batch_seqs']
         print("Test batch size: %d" % n_test_batch_seqs)
         ytrue_test, log_ypred_test = predict(model, test_seqs, n_test_batch_seqs, 'cuda:0')
         toc = time.perf_counter()

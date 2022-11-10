@@ -1,19 +1,17 @@
 {
-    "model" : "bkt-sd",
-    "with_forgetting" : true,
-    "p_n_batch_seqs" : false,
-    "n_batch_seqs" : 100,
-    "n_batch_trials" : 50,
-    "n_batch_seqs_testing" : 500,
-    "epochs" : 100,
-    "lr" : 0.01,
+    "learning_rate" : 0.1, 
+    "epochs" : 20, 
     "patience" : 5,
-    "n_samples" : 20,
-    "n_groups" : 10,
-    "temperature" : 1,
-    "hyperparams" : {
-        "lr" : [0.1, 0.01],
-        "temperature" : [0.5, 1.0],
-        "n_groups" : [1, 10, 20, 50]
-    }
+    "tau" : 1.5,
+    "n_latent_kcs" : 20,
+    "lambda" : 0.00,
+    "n_batch_seqs" : 20,
+    "n_test_batch_seqs" : 500,
+    "hard_samples" : false,
+    "ref_labels" : null,
+    "use_problems" : true,
+    "n_initial_kcs" : 5,
+    "n_valid_samples" : 50,
+    "n_test_samples" : 50,
+    "n_train_samples" : 1
 }

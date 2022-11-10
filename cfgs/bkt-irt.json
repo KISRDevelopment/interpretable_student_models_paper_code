@@ -1,5 +1,5 @@
 {
-    "learning_rate" : 0.1, 
+    "learning_rate" : 0.5, 
     "epochs" : 100, 
     "patience" : 10,
     "n_batch_seqs" : 500,
