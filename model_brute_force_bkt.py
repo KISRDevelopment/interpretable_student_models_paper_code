@@ -76,10 +76,8 @@ def main(master_df, splits):
     params_df = pd.concat(param_dfs, axis=0, ignore_index=True)
 
     results_df = pd.DataFrame(results)
-    #print(results_df)
-    #results_df.to_csv(output_path, index=False)
-
-    return result_df, params_df 
+    
+    return results_df, params_df 
 
 def prepare(df):
     """ prepares data to be fitted by multiple BKT models, one per skill """
@@ -190,7 +188,7 @@ def test_bkt(params, seqs_by_skill):
     return np.array(all_obs), np.array(all_probs)
 
 if __name__ == "__main__":
-    main()
+    
     input_path = sys.argv[1]
     split_path = sys.argv[2]
     output_path = sys.argv[3]
@@ -204,6 +202,4 @@ if __name__ == "__main__":
     params_path = output_path.replace('.csv','.params.csv')
     params_df.to_csv(params_path, index=False)
 
-    results_df = pd.DataFrame(results)
-    #print(results_df)
     results_df.to_csv(output_path, index=False)

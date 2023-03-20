@@ -18,7 +18,9 @@ def main():
         1024,
         2048,
         4096,
-        8192
+        8192,
+        16384,
+        32768
     ]
     n_skills = 50
     n_trials_per_skill = 10
@@ -72,7 +74,7 @@ def main():
 
         dataset_name = "perf_%d" % n_students
         df.to_csv("data/datasets/%s.csv" % dataset_name, index=False)
-        split_dataset.main("data/datasets/%s.csv" % dataset_name, 
-            "data/splits/%s.npy" % dataset_name, 5, 5)
+        full_splits = split_dataset.main(df, 5, 5)
+        np.save("data/splits/%s.npy" % dataset_name, full_splits)
 if __name__ == "__main__":
     main()
