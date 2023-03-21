@@ -21,8 +21,8 @@ for dataset in datasets:
 
     subprocess.call(['python', "model_brute_force_bkt.py",  dataset_path, splits_path, output_path])
 
-cfg_name = 'torch-bkt-fast'
-cfg_path = "cfgs/bkt-impatient.json"
+cfg_name = 'torch-bkt'
+cfg_path = "cfgs/bkt.json"
 model_script = "torch_bkt.py"
 
 for dataset in datasets:
@@ -35,7 +35,22 @@ for dataset in datasets:
     output_path = "data/results-perf/%s_%s.csv" % (cfg_name, dataset)
 
 
-    #subprocess.call(['python', model_script, cfg_path, dataset, output_path])
+    subprocess.call(['python', model_script, cfg_path, dataset, output_path])
+
+cfg_name = 'torch-bkt-fast'
+cfg_path = "cfgs/bkt-impatient.json"
+model_script = "torch_bkt.py"
+for dataset in datasets:
+    if os.path.exists("data/results-perf/%s_%s.csv"%(cfg_name, dataset)):
+        continue
+    
+    print(cfg_name, dataset)
+    dataset_path = "data/datasets/%s.csv" % dataset
+    splits_path = "data/splits/%s.npy" % dataset 
+    output_path = "data/results-perf/%s_%s.csv" % (cfg_name, dataset)
+
+
+    subprocess.call(['python', model_script, cfg_path, dataset, output_path])
 
 
 cfg_name = 'ref-bkt'
@@ -48,5 +63,5 @@ for dataset in datasets:
     print(cfg_name, dataset)
     output_path = "data/results-perf/%s_%s.csv" % (cfg_name, dataset)
 
-    #subprocess.call(['python', model_script, dataset, output_path])
+    subprocess.call(['python', model_script, dataset, output_path])
     
