@@ -385,7 +385,7 @@ if __name__ == "__main__":
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     
-    embd_df = pd.read_csv("embeddings/%s_embeddings.csv" % dataset_name).set_index('problem')
+    embd_df = pd.read_csv("embeddings/%s_solution_embeddings.csv" % dataset_name).set_index('problem')
     int_cols = [c for c in embd_df.columns if str.isdigit(c)]
     embd_df = embd_df[int_cols]
     embd_mat = embd_df.loc[sorted(embd_df.index)].to_numpy()
