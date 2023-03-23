@@ -314,6 +314,10 @@ if __name__ == "__main__":
         cfg = json.load(f)
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+
+    if cfg.get('single_kc', False):
+        df['skill'] = 0
+    
     splits = np.load("data/splits/%s.npy" % dataset_name)
     results_df, all_params = main(cfg, df, splits)
 
