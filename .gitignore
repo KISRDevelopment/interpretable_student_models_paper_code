@@ -5,3 +5,4 @@ tmp
 Untitled*.ipynb
 venv
 api_key
+.DS_Store
