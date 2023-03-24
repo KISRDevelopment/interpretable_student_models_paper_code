@@ -9,6 +9,10 @@ def main(path, output_path):
     df.to_csv(output_path, index=False)
     print(df)
 
+    gdf = df.groupby(['model', 'dataset'])['auc_roc'].mean()
+    print(gdf)
+    gdf = df.groupby(['model', 'dataset'])['auc_roc'].std()
+    print(gdf)
 def load_results(path):
 
     files = glob.glob(path + "/*.csv")
