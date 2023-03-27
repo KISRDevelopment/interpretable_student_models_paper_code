@@ -1,12 +1,9 @@
 import numpy as np 
 import pandas as pd
-import torch_bkt_skill_discovery_advanced
-import torch_bkt_skill_discovery_alt2
 import torch_bkt_skill_discovery
 import generate_skill_discovery_data
 import split_dataset
 import os 
-import torch_bkt_one_hot_kcs 
 import torch_bkt
 import model_brute_force_bkt
 def main():
@@ -15,9 +12,10 @@ def main():
     
     n_latent_kcs = 100
     n_epochs = 100
-    n_patience = 10
-    n_students = 500
+    n_patience = 5
+    n_students = 50
     n_trials_per_student = 200
+    same_order = False
 
     result_dfs = []
 
@@ -27,10 +25,22 @@ def main():
         df, probs, actual_labels = generate_skill_discovery_data.main(n_problems_per_skill=n_problems_per_skill, 
             n_students=n_students, 
             n_skills=n_skills,
-            seed=41,
-            no_bkt=False)
+            seed=6456,
+            same_order=same_order)
         splits = split_dataset.main(df, 5, 5)
         
+        baseline_results_df, _ = torch_bkt.main({
+            "learning_rate" : 0.1, 
+            "epochs" : n_epochs, 
+            "patience" : n_patience,
+            "n_batch_seqs" : n_students // 10,
+            "n_test_batch_seqs" : 500
+        }, df, splits)
+        baseline_results_df['model'] = 'baseline'
+        baseline_results_df['n_skills'] = n_skills
+        
+        result_dfs.append(baseline_results_df)
+
         cfg = {
             "learning_rate" : 0.1, 
             "epochs" : n_epochs, 
@@ -59,15 +69,7 @@ def main():
         results_df['model'] = 'sd-initialized'
         result_dfs.append(results_df)
 
-        baseline_results_df, _ = torch_bkt.main({
-            "learning_rate" : 0.1, 
-            "epochs" : n_epochs, 
-            "patience" : n_patience,
-            "n_batch_seqs" : n_students // 10
-        }, df, splits)
-        baseline_results_df['model'] = 'baseline'
-        baseline_results_df['n_skills'] = n_skills
-        result_dfs.append(baseline_results_df)
+        
         
         
         df['skill'] = df['problem'].tolist()
@@ -75,7 +77,8 @@ def main():
             "learning_rate" : 0.5, 
             "epochs" : n_epochs, 
             "patience" : n_patience,
-            "n_batch_seqs" : n_students // 10
+            "n_batch_seqs" : n_students // 10,
+            "n_test_batch_seqs" : 500
         }, df, splits)
         no_sd_results_df['model'] = 'no_sd'
         no_sd_results_df['n_skills'] = n_skills

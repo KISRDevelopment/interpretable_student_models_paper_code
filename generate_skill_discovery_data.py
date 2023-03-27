@@ -5,7 +5,7 @@ from collections import defaultdict
 import split_dataset
 from scipy.stats import qmc
 import itertools
-def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
+def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False):
     if seed is not None:
         np.random.seed(seed)
 
@@ -31,14 +31,19 @@ def main(n_students, n_problems_per_skill, n_skills, no_bkt=False, seed=None):
     # generate trials
     cols = defaultdict(list)
     
+    # generate problem sequence
+    if same_order:
+        problem_seq = np.random.permutation(problems.shape[0])
+    
     n_state = 0
     for s in range(n_students):
 
         # initialize state (n_skills,)
         state = rng.binomial(1, probs[:,0])
         
-        # generate problem sequence
-        problem_seq = np.random.permutation(problems.shape[0])
+        # generate problem sequence if different for each student
+        if not same_order:
+            problem_seq = np.random.permutation(problems.shape[0])
         
         for t in range(problem_seq.shape[0]):
             problem = problem_seq[t]

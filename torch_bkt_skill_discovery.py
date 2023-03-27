@@ -169,7 +169,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             optimizer.step()
 
             losses.append(train_loss.item())
-            print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / n_batch_seqs )))
+            #print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / n_batch_seqs )))
         # tau = np.maximum(0.5, tau * 0.95)
         # print("new tau: %0.2f" % tau)
         mean_train_loss = np.mean(losses)
