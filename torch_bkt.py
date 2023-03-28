@@ -318,6 +318,9 @@ if __name__ == "__main__":
     if cfg.get('single_kc', False):
         df['skill'] = 0
     
+    if cfg.get('use_problems', False):
+        df['skill'] = df['problem']
+        
     splits = np.load("data/splits/%s.npy" % dataset_name)
     results_df, all_params = main(cfg, df, splits)
 

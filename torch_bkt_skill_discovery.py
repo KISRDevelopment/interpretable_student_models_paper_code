@@ -295,7 +295,13 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 def main(cfg, df, splits):
     
     if cfg['use_problems']:
+        problems_to_skills = dict(zip(df['problem'], df['skill']))
+
+        n_problems = np.max(df['problem']) + 1
+        A = np.array([problems_to_skills[p] for p in range(n_problems)])
+        cfg['ref_labels'] = A
         df['skill'] = df['problem']
+        
 
     seqs = to_student_sequences(df)
     

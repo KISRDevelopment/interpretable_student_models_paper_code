@@ -3,9 +3,9 @@ import numpy.random as rng
 import pandas as pd 
 from sklearn.model_selection import GroupKFold
 
-rng.seed(41)
-
 def main(df, n_folds=5, n_folds_inner=5):
+
+    rng.seed(41)
 
     students = np.array(df['student'])
     group_kfold = GroupKFold(n_splits=n_folds)

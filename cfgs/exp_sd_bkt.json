@@ -1,0 +1,8 @@
+{
+    "learning_rate" : 0.1, 
+    "epochs" : 100, 
+    "patience" : 10,
+    "n_batch_seqs" : 500,
+    "n_test_batch_seqs" : 500,
+    "use_problems" : true
+}

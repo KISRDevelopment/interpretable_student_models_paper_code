@@ -7,17 +7,18 @@ from scipy.stats import qmc
 import itertools
 def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False):
     if seed is not None:
-        np.random.seed(seed)
+        rng.seed(seed)
 
     # pI, pL, pF, pG, pS
     pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
-    pLs = pIs 
-    pFs = pIs
-    pGs = np.array([0.1, 0.2, 0.3, 0.4])
-    pSs = np.array([0.1, 0.2, 0.3, 0.4])
+    pLs = [0.01, 0.05, 0.1, 0.2] 
+    pFs = [0.01, 0.05, 0.1, 0.2]
+    pGs = [0.01, 0.05, 0.1, 0.2]
+    pSs = [0.01, 0.05, 0.1, 0.2]
     all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
     print("Choosing from %d combinations" % all_prob_combs.shape[0])
     probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=False, size=n_skills), :]
+    #probs = np.array([[0.2, 0.2, 0., 0.2, 0.2]])
     print(probs)
     
     # generate assignments
@@ -35,7 +36,8 @@ def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False
     if same_order:
         problem_seq = np.random.permutation(problems.shape[0])
     
-    n_state = 0
+    kc_one = 0
+    kc_zero = 0
     for s in range(n_students):
 
         # initialize state (n_skills,)
@@ -51,14 +53,14 @@ def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False
             
             kc_state = state[kc]
             _, pL, pF, pG, pS = probs[kc, :]
-                
+            
             # get p(correct|state)
             if kc_state == 1:
                 pC = 1-pS
-                n_state += 1
+                kc_one += 1
             else:
                 pC = pG
-            
+                kc_zero += 1
             
             ans = rng.binomial(1, pC)
             cols["student"].append(s)
@@ -70,7 +72,9 @@ def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False
             if kc_state == 0:
                 state[kc] = rng.binomial(1, pL)
             else:
-                state[kc] = rng.binomial(1, 1-pF)
+                state[kc] = 1 - rng.binomial(1, pF)
+
+    print(kc_zero, kc_one)
 
     df = pd.DataFrame(cols)
         
