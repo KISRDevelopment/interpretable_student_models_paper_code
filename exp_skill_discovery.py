@@ -63,6 +63,20 @@ def main():
             dataset_name, 
             output_path])
     
+    #
+    # BKT model with one KC
+    #
+    for n_skills in ns_skills:
+        print("Number of skills = %d, model = Single KC BKT" % n_skills)
+        dataset_name = "skill_discovery_%d" % n_skills
+        output_path = "data/results-sd/bkt-single-kc_%d.csv" % n_skills
+        cfg_path = "cfgs/bkt_single_kc.json"
+        if os.path.exists(output_path):
+            continue
+        subprocess.call(['python', "torch_bkt.py", 
+            cfg_path,
+            dataset_name, 
+            output_path])
 
     #
     # BKT model with skill discovery
