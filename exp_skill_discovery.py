@@ -4,6 +4,7 @@ import generate_skill_discovery_data
 import split_dataset
 import os 
 import subprocess 
+import glob 
 
 def main():
     
@@ -79,7 +80,29 @@ def main():
             output_path])
 
     
-    exit()
+    results = generate_results()
+    results.to_csv('tmp/results_exp_skill_discovery.csv', index=False)
+
+    gdf = results.groupby(['model', 'n_skills'])['auc_roc'].mean()
+    print(gdf)
+def generate_results():
+
+    files = glob.glob("data/results-sd/*.csv")
+
+    dfs = []
+    for file in files:
+
+        model, n_skills = os.path.basename(file).replace('.csv','').split('_')
+        n_skills = int(n_skills)
+
+        df = pd.read_csv(file).rename(columns={ 'Unnamed: 0' : 'split' })
+        df['model'] = model 
+        df['n_skills'] = n_skills
+        dfs.append(df)
+    
+    df = pd.concat(dfs, axis=0).sort_values(['model', 'n_skills'])
+    
+    return df
 
 
 if __name__ == "__main__":
