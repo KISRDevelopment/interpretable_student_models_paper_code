@@ -11,8 +11,8 @@ def main():
     ns_skills = [1, 2, 5, 25, 50]
     n_students = 100
     n_problems_per_skill = 10
-    same_order = False
-    regenerate = False 
+    block_kcs = True
+    regenerate = True 
 
     #
     # generate KC data
@@ -24,8 +24,8 @@ def main():
         df, probs, actual_labels = generate_skill_discovery_data.main(n_problems_per_skill=n_problems_per_skill, 
             n_students=n_students, 
             n_skills=n_skills,
-            seed=41,
-            same_order=same_order)
+            seed=456,
+            block_kcs=block_kcs)
         splits = split_dataset.main(df, 5, 5)
         
         df.to_csv("data/datasets/skill_discovery_%d.csv" % n_skills, index=False)

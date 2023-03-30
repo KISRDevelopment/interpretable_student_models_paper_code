@@ -303,8 +303,14 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 def main(cfg, df, embd_mats, splits):
     
     if cfg['use_problems']:
+        n_skills = np.max(df['skill']) + 1
+        n_problems = np.max(df['problem']) + 1
+        # A = np.zeros((n_problems, n_skills))
+        # for r in df.itertuples():
+        #     A[r.problem, r.skill] = 1
+        
         df['skill'] = df['problem']
-
+        
     seqs = to_student_sequences(df)
     
     all_ytrue = []
@@ -338,6 +344,7 @@ def main(cfg, df, embd_mats, splits):
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
         
         embd_mat = embd_mats[s, :, :]
+        #embd_mat = A 
         embd_mat = th.tensor(embd_mat).float().to('cuda:0')
         model, best_aux = train(train_seqs, valid_seqs, 
             embd_mat=embd_mat,

@@ -89,7 +89,7 @@ if __name__ == "__main__":
     n_problems_per_skill = int(sys.argv[2]) 
     n_skills = int(sys.argv[3])
     dataset_name = sys.argv[4]
-    block_kcs = bool(sys.argv[5])
+    block_kcs = sys.argv[5] == '1'
 
     df, probs, A = main(n_students, n_problems_per_skill, n_skills, block_kcs=block_kcs)
 

@@ -14,7 +14,7 @@ class DKTModel(nn.Module):
         self.n_kcs = n_kcs 
         self.kc_embd = nn.Linear(n_kcs, n_kc_embd)
         self.cell = nn.LSTM(n_kc_embd + 1, n_hidden, num_layers=1, batch_first=True)
-        self.ff = nn.Linear(n_hidden, n_kcs)
+        self.ff = nn.Linear(n_hidden, n_kc_embd)
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, input, curr_kc, state=None):
@@ -38,8 +38,10 @@ class DKTModel(nn.Module):
         cell_output, last_state = self.cell(cell_input, state)
         #cell_output = self.dropout(cell_output)
 
-        kc_logits = self.ff(cell_output) # [n_batch, t, n_kcs]
-        logits = (kc_logits * curr_kc).sum(dim=2) # [n_batch, t]
+        kc_logits = self.ff(cell_output) # [n_batch, t, n_kcs_embd]
+        curr_kc_embd = self.kc_embd(curr_kc) # n_Batch, t, n_kcs_embd
+
+        logits = (kc_logits * curr_kc_embd).sum(dim=2) # [n_batch, t]
         
         return logits, last_state
 
