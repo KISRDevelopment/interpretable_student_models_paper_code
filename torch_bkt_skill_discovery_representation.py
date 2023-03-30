@@ -177,7 +177,7 @@ def train(train_seqs, valid_seqs, embd_mat, n_kcs, device, learning_rate, epochs
             optimizer.step()
 
             losses.append(train_loss.item())
-            print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / n_batch_seqs )))
+            #print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / n_batch_seqs )))
         # tau = np.maximum(0.5, tau * 0.95)
         # print("new tau: %0.2f" % tau)
         mean_train_loss = np.mean(losses)
@@ -398,7 +398,12 @@ if __name__ == "__main__":
     # embd_df = embd_df[int_cols]
     # embd_mat = embd_df.loc[sorted(embd_df.index)].to_numpy()
     
-    embd_mats = np.load("tmp/dkttest.npy")
+    #
+    # run DKT to boostrap problem representations
+    #
+    import dkt 
+    dkt.main("cfgs/dkt.json", dataset_name, "tmp/dkt.csv")
+    embd_mats = np.load("tmp/dkt.npy")
 
 
     splits = np.load("data/splits/%s.npy" % dataset_name)

@@ -8,7 +8,7 @@ import copy
 import json 
 
 class DKTModel(nn.Module):
-    def __init__(self, n_kcs, n_hidden, n_kc_embd=10):
+    def __init__(self, n_kcs, n_hidden, n_kc_embd=50):
         super(DKTModel, self).__init__()
         
         self.n_kcs = n_kcs 

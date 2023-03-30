@@ -11,14 +11,21 @@ def main():
     ns_skills = [1, 2, 5, 25, 50]
     n_students = 100
     n_problems_per_skill = 10
-    block_kcs = True
-    regenerate = True 
+    block_kcs = False
+    regenerate = False 
+    
+    final_results_path = 'tmp/results_exp_skill_discovery_random.csv'
+    results_dir = "data/results-sd-random"
+    dataset_name_tmpl = "skill_discovery_random_%d"
+
+    os.makedirs(results_dir, exist_ok=True)
 
     #
     # generate KC data
     #
     for n_skills in ns_skills:
-        if not regenerate and os.path.exists("data/datasets/skill_discovery_%d.csv" % n_skills):
+        dataset_file = dataset_name_tmpl % n_skills
+        if not regenerate and os.path.exists("data/datasets/%s.csv" % dataset_file):
             continue
         
         df, probs, actual_labels = generate_skill_discovery_data.main(n_problems_per_skill=n_problems_per_skill, 
@@ -28,8 +35,8 @@ def main():
             block_kcs=block_kcs)
         splits = split_dataset.main(df, 5, 5)
         
-        df.to_csv("data/datasets/skill_discovery_%d.csv" % n_skills, index=False)
-        np.save("data/splits/skill_discovery_%d.npy" % n_skills, splits)
+        df.to_csv("data/datasets/%s.csv" % dataset_file, index=False)
+        np.save("data/splits/%s.npy" % dataset_file, splits)
     
     print("Generated datasets.")
     
@@ -38,70 +45,78 @@ def main():
     #
     for n_skills in ns_skills:
         print("Number of skills = %d, model = Cheating BKT" % n_skills)
-        dataset_name = "skill_discovery_%d" % n_skills
-        output_path = "data/results-sd/bkt-cheating_%d.csv" % n_skills
+        dataset_file = dataset_name_tmpl % n_skills
+        output_path = "%s/bkt-cheating_%d.csv" % (results_dir, n_skills)
         cfg_path = "cfgs/bkt.json"
         if os.path.exists(output_path):
             continue
         subprocess.call(['python', "torch_bkt.py", 
             cfg_path,
-            dataset_name, 
+            dataset_file, 
             output_path])
     
+
     #
     # BKT model that does not perform skill discovery (assumes problems are skills)
     #
     for n_skills in ns_skills:
         print("Number of skills = %d, model = BKT" % n_skills)
-        dataset_name = "skill_discovery_%d" % n_skills
-        output_path = "data/results-sd/bkt_%d.csv" % n_skills
+        dataset_file = dataset_name_tmpl % n_skills
+        output_path = "%s/bkt_%d.csv" % (results_dir, n_skills)
         cfg_path = "cfgs/exp_sd_bkt.json"
         if os.path.exists(output_path):
             continue
         subprocess.call(['python', "torch_bkt.py", 
             cfg_path,
-            dataset_name, 
+            dataset_file, 
             output_path])
     
+    
+
     #
     # BKT model with one KC
     #
     for n_skills in ns_skills:
         print("Number of skills = %d, model = Single KC BKT" % n_skills)
-        dataset_name = "skill_discovery_%d" % n_skills
-        output_path = "data/results-sd/bkt-single-kc_%d.csv" % n_skills
+        dataset_file = dataset_name_tmpl % n_skills
+        output_path = "%s/bkt-single-kc_%d.csv" % (results_dir, n_skills)
         cfg_path = "cfgs/bkt_single_kc.json"
         if os.path.exists(output_path):
             continue
         subprocess.call(['python', "torch_bkt.py", 
             cfg_path,
-            dataset_name, 
+            dataset_file, 
             output_path])
 
+    
     #
     # BKT model with skill discovery
     #
     for n_skills in ns_skills:
         print("Number of skills = %d, model = Skill Discovery BKT" % n_skills)
-        dataset_name = "skill_discovery_%d" % n_skills
-        output_path = "data/results-sd/bkt-sd_%d.csv" % n_skills
+        dataset_file = dataset_name_tmpl % n_skills
+        output_path = "%s/bkt-sd_%d.csv" % (results_dir, n_skills)
         cfg_path = "cfgs/exp_sd_bkt-sd.json"
         if os.path.exists(output_path):
             continue
         subprocess.call(['python', "torch_bkt_skill_discovery.py", 
             cfg_path,
-            dataset_name, 
+            dataset_file, 
             output_path])
 
     
-    results = generate_results()
-    results.to_csv('tmp/results_exp_skill_discovery.csv', index=False)
+    results = generate_results(results_dir)
+    results.to_csv(final_results_path, index=False)
 
-    gdf = results.groupby(['model', 'n_skills'])['auc_roc'].mean()
-    print(gdf)
-def generate_results():
+    gdf_mean = results.groupby(['model', 'n_skills'])['auc_roc'].mean()
+    gdf_stderr = results.groupby(['model', 'n_skills'])['auc_roc'].std(ddof=1) / np.sqrt(5)
+    results = pd.concat((gdf_mean, gdf_stderr), axis=1)
+    results.columns = ['mean', 'stderr']
+    print(results)
 
-    files = glob.glob("data/results-sd/*.csv")
+def generate_results(results_dir):
+
+    files = glob.glob("%s/*.csv" % results_dir)
 
     dfs = []
     for file in files:
