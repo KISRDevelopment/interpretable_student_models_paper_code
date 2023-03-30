@@ -300,7 +300,7 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 
     return stop
 
-def main(cfg, df, embd_mat, splits):
+def main(cfg, df, embd_mats, splits):
     
     if cfg['use_problems']:
         df['skill'] = df['problem']
@@ -336,7 +336,8 @@ def main(cfg, df, embd_mat, splits):
         tic = time.perf_counter()
 
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
-
+        
+        embd_mat = embd_mats[s, :, :]
         embd_mat = th.tensor(embd_mat).float().to('cuda:0')
         model, best_aux = train(train_seqs, valid_seqs, 
             embd_mat=embd_mat,
@@ -385,13 +386,16 @@ if __name__ == "__main__":
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     
-    embd_df = pd.read_csv("embeddings/%s_embeddings.csv" % dataset_name).set_index('problem')
-    int_cols = [c for c in embd_df.columns if str.isdigit(c)]
-    embd_df = embd_df[int_cols]
-    embd_mat = embd_df.loc[sorted(embd_df.index)].to_numpy()
+    # embd_df = pd.read_csv("embeddings/%s_embeddings.csv" % dataset_name).set_index('problem')
+    # int_cols = [c for c in embd_df.columns if str.isdigit(c)]
+    # embd_df = embd_df[int_cols]
+    # embd_mat = embd_df.loc[sorted(embd_df.index)].to_numpy()
     
+    embd_mats = np.load("tmp/dkttest.npy")
+
+
     splits = np.load("data/splits/%s.npy" % dataset_name)
-    results_df, all_params = main(cfg, df, embd_mat, splits)
+    results_df, all_params = main(cfg, df, embd_mats, splits)
 
     results_df.to_csv(output_path)
 

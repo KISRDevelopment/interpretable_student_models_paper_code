@@ -5,7 +5,7 @@ from collections import defaultdict
 import split_dataset
 from scipy.stats import qmc
 import itertools
-def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False):
+def main(n_students, n_problems_per_skill, n_skills, seed=None, block_kcs=False):
     if seed is not None:
         rng.seed(seed)
 
@@ -33,9 +33,10 @@ def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False
     cols = defaultdict(list)
     
     # generate problem sequence
-    if same_order:
-        problem_seq = np.random.permutation(problems.shape[0])
-    
+    if block_kcs:
+        problem_seq = np.argsort(A)
+        print(A[problem_seq])
+
     kc_one = 0
     kc_zero = 0
     for s in range(n_students):
@@ -44,7 +45,7 @@ def main(n_students, n_problems_per_skill, n_skills, seed=None, same_order=False
         state = rng.binomial(1, probs[:,0])
         
         # generate problem sequence if different for each student
-        if not same_order:
+        if not block_kcs:
             problem_seq = np.random.permutation(problems.shape[0])
         
         for t in range(problem_seq.shape[0]):
@@ -88,8 +89,9 @@ if __name__ == "__main__":
     n_problems_per_skill = int(sys.argv[2]) 
     n_skills = int(sys.argv[3])
     dataset_name = sys.argv[4]
+    block_kcs = bool(sys.argv[5])
 
-    df, probs, A = main(n_students, n_problems_per_skill, n_skills)
+    df, probs, A = main(n_students, n_problems_per_skill, n_skills, block_kcs=block_kcs)
 
     df.to_csv("data/datasets/%s.csv" % dataset_name, index=False)
     splits = split_dataset.main(df, 5, 5)
