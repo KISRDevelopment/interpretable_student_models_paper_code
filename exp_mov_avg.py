@@ -6,8 +6,8 @@ def main():
 
     problem_embd = th.tensor([
         [1, 1, 0, 0, 0],
-        [1, 1, 0, 0, 0],
         [0, 1, 1, 0, 1],
+        [1, 1, 0, 0, 0],
         [0, 1, 0, 1, 0],
         [1, 0, 1, 0, 1]
     ]).float()
@@ -15,12 +15,14 @@ def main():
     problem_seq = th.tensor([1, 0, 3, 4, 2, 0])
     y =   th.tensor([1, 1, 1, 0, 1, 1]).float()
     
-    # compute cosine similarity (t x t)
+    # compute problem cosine similarity (P x P)
     mag = th.linalg.vector_norm(problem_embd, dim=1)
-    denom = mag[problem_seq, None] @ mag[problem_seq, None].T
-    sim_mat = (problem_embd[problem_seq, :] @ problem_embd[problem_seq, :].T) / denom
+    denom = mag[:, None] @ mag [None, :]
+    problem_sim_mat = (problem_embd @ problem_embd.T) / denom
     
+    sim_mat = problem_sim_mat[problem_seq, :][:, problem_seq]
     
+
     # instantiate mask and apply to similarity matrix
     mask = th.ones_like(sim_mat).tril(diagonal=-1)
     sim_mat = sim_mat * mask 
