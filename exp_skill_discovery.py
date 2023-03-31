@@ -18,6 +18,10 @@ def main():
     results_dir = "data/results-sd-random"
     dataset_name_tmpl = "skill_discovery_random_%d"
 
+    # final_results_path = 'tmp/results_exp_skill_discovery.csv'
+    # results_dir = "data/results-sd"
+    # dataset_name_tmpl = "skill_discovery_%d"
+
     os.makedirs(results_dir, exist_ok=True)
 
     #
@@ -104,7 +108,21 @@ def main():
             dataset_file, 
             output_path])
 
-    
+    #
+    # BKT model with skill discovery (bootstrapped via DKT)
+    #
+    for n_skills in ns_skills:
+        print("Number of skills = %d, model = Skill Discovery BKT with Bootstrapping" % n_skills)
+        dataset_file = dataset_name_tmpl % n_skills
+        output_path = "%s/bkt-sd-bootstrapped_%d.csv" % (results_dir, n_skills)
+        cfg_path = "cfgs/exp_sd_bkt-sd.json"
+        if os.path.exists(output_path):
+            continue
+        subprocess.call(['python', "torch_bkt_skill_discovery_representation.py", 
+            cfg_path,
+            dataset_file, 
+            output_path])
+
     results = generate_results(results_dir)
     results.to_csv(final_results_path, index=False)
 
