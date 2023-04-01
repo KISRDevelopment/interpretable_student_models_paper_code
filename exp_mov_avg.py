@@ -71,30 +71,27 @@ def evaluate(cfg, df, splits, device='cuda:0'):
         n_test_batch_seqs = cfg['n_test_batch_seqs']
         print("Test batch size: %d" % n_test_batch_seqs)
 
-        # ytrue_test, log_ypred_test = predict(model, test_seqs, n_test_batch_seqs, device)
+        ytrue_test, ypred_test = predict(model, test_seqs, n_test_batch_seqs, device)
         
-        # ypred_test = np.exp(log_ypred_test)
-
         # with th.no_grad():
         #     param_alpha, param_obs, param_t = model.get_params()
         #     all_params['alpha'].append(param_alpha.cpu().numpy())
         #     all_params['obs'].append(param_obs.cpu().numpy())
         #     all_params['t'].append(param_t.cpu().numpy())
 
-        # run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
-        # run_result['time_diff_sec'] = toc - tic 
+        run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
+        
+        results.append(run_result)
+        all_ytrue.extend(ytrue_test)
+        all_ypred.extend(ypred_test)
 
-        # results.append(run_result)
-        # all_ytrue.extend(ytrue_test)
-        # all_ypred.extend(ypred_test)
+    all_ytrue = np.array(all_ytrue)
+    all_ypred = np.array(all_ypred)
 
-    # all_ytrue = np.array(all_ytrue)
-    # all_ypred = np.array(all_ypred)
+    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
+    print(results_df)
 
-    # results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
-    # print(results_df)
-
-    # return results_df, all_params
+    return results_df, all_params
 
 def train(train_seqs, valid_seqs, n_problems, cfg, device):
 
@@ -129,7 +126,9 @@ def train(train_seqs, valid_seqs, n_problems, cfg, device):
             train_loss = -(batch_obs_seqs * logpC + (1-batch_obs_seqs) * logpnC).flatten()
             mask_ix = batch_mask_seqs.flatten()
 
-            train_loss = train_loss[mask_ix].mean()
+            sim_mat = model.problem_sim_mat()
+
+            train_loss = train_loss[mask_ix].mean() + cfg['lambda'] * sim_mat.square().sum()
 
             optimizer.zero_grad()
             train_loss.backward()
@@ -213,6 +212,14 @@ class ExpMovAvgModel(nn.Module):
         self.n_problems = n_problems 
         self.problem_embd = nn.Embedding(n_problems, n_hidden)
         self.problem_lambda = nn.Linear(n_hidden, 1)
+
+    def problem_sim_mat(self):
+
+        mag = th.linalg.vector_norm(self.problem_embd.weight, dim=1) # P
+        denom = mag[:,None] @ mag[None,:] # PxP
+        x = self.problem_embd.weight # PxD
+        sim_mat = x @ x.T / denom 
+        return sim_mat
 
     def forward(self, y, problem_seq):
         """
