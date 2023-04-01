@@ -1,0 +1,9 @@
+{
+    "epochs" : 1000,
+    "n_hidden" : 10,
+    "learning_rate" : 0.01,
+    "n_train_batch_seqs" : 10,
+    "n_test_batch_seqs" : 1000,
+    "n_valid_batch_seqs" : 1000,
+    "patience" : 100
+}
