@@ -5,6 +5,7 @@
     "n_train_batch_seqs" : 10,
     "n_test_batch_seqs" : 1000,
     "n_valid_batch_seqs" : 1000,
+    "n_batch_trials" : 100,
     "patience" : 10,
     "lambda" : 0.00
 }

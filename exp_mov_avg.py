@@ -71,7 +71,7 @@ def evaluate(cfg, df, splits, device='cuda:0'):
         n_test_batch_seqs = cfg['n_test_batch_seqs']
         print("Test batch size: %d" % n_test_batch_seqs)
 
-        ytrue_test, ypred_test = predict(model, test_seqs, n_test_batch_seqs, device)
+        ytrue_test, ypred_test = predict(model, test_seqs, n_test_batch_seqs, cfg['n_batch_trials'], device)
         
         # with th.no_grad():
         #     param_alpha, param_obs, param_t = model.get_params()
@@ -114,17 +114,24 @@ def train(train_seqs, valid_seqs, n_problems, cfg, device):
             end = offset + n_batch_seqs
             batch_seqs = train_seqs[offset:end]
 
-            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
-            batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
-            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
-            batch_mask_seqs = batch_mask_seqs.to(device)
+            obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
+            problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
+            mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
+            mask_seqs = mask_seqs.to(device)
 
-            pC = model(batch_obs_seqs, batch_problem_seqs)
+            pC = th.zeros((len(batch_seqs), obs_seqs.shape[1])).to(device)
+
+            for i in range(0, obs_seqs.shape[1], cfg['n_batch_trials']):
+                to_trial = i + cfg['n_batch_trials']
+                batch_obs_seqs = obs_seqs[:, i:to_trial]
+                batch_problem_seqs = problem_seqs[:, i:to_trial]
+                pC[:, i:to_trial] = model(batch_obs_seqs, batch_problem_seqs)
+            
             logpC = th.log(pC)
             logpnC = th.log(1 - pC)
 
-            train_loss = -(batch_obs_seqs * logpC + (1-batch_obs_seqs) * logpnC).flatten()
-            mask_ix = batch_mask_seqs.flatten()
+            train_loss = -(obs_seqs * logpC + (1-obs_seqs) * logpnC).flatten()
+            mask_ix = mask_seqs.flatten()
 
             sim_mat = model.problem_sim_mat()
 
@@ -141,7 +148,7 @@ def train(train_seqs, valid_seqs, n_problems, cfg, device):
         #
         # Validation
         #
-        ytrue, ypred = predict(model, valid_seqs, n_valid_seqs, device)
+        ytrue, ypred = predict(model, valid_seqs, n_valid_seqs, cfg['n_batch_trials'], device)
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
 
@@ -173,7 +180,7 @@ def to_student_sequences(df):
         seqs[r.student]["problem"].append(r.problem)
     return seqs
 
-def predict(model, seqs, n_batch_seqs, device):
+def predict(model, seqs, n_batch_seqs, n_batch_trials, device):
     model.eval()
     seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
     with th.no_grad():
@@ -183,18 +190,28 @@ def predict(model, seqs, n_batch_seqs, device):
             end = offset + n_batch_seqs
             batch_seqs = seqs[offset:end]
 
-            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
+            obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
+            problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
+            mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
+            mask_seqs = mask_seqs.to(device)
 
-            pC = model(batch_obs_seqs.to(device), batch_problem_seqs.to(device)).cpu()
-                
+            pC = th.zeros((len(batch_seqs), obs_seqs.shape[1])).to(device)
+
+            for i in range(0, obs_seqs.shape[1], n_batch_trials):
+                to_trial = i + n_batch_trials
+                batch_obs_seqs = obs_seqs[:, i:to_trial]
+                batch_problem_seqs = problem_seqs[:, i:to_trial]
+                pC[:, i:to_trial] = model(batch_obs_seqs, batch_problem_seqs)
+
+            #pC = model(batch_obs_seqs.to(device), batch_problem_seqs.to(device)).cpu()
+            
+            
             ypred = pC.flatten()
-            ytrue = batch_obs_seqs.flatten()
-            mask_ix = batch_mask_seqs.flatten()
+            ytrue = obs_seqs.flatten()
+            mask_ix = mask_seqs.flatten()
                 
-            ypred = ypred[mask_ix].numpy()
-            ytrue = ytrue[mask_ix].numpy()
+            ypred = ypred[mask_ix].cpu().numpy()
+            ytrue = ytrue[mask_ix].cpu().numpy()
 
             all_ypred.append(ypred)
             all_ytrue.append(ytrue)
@@ -263,7 +280,7 @@ class ExpMovAvgModel(nn.Module):
         slip = th.sigmoid(self.problem_slip(x))[:,:,0]
 
         yhat = h * (1-slip) + (1-h) * guess 
-        
+
         return th.clamp(yhat, 0.01, 0.99) 
 
 
