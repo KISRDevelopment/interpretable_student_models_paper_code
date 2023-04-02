@@ -212,7 +212,9 @@ class ExpMovAvgModel(nn.Module):
         self.n_problems = n_problems 
         self.problem_embd = nn.Embedding(n_problems, n_hidden)
         self.problem_lambda = nn.Linear(n_hidden, 1)
-
+        self.problem_guess = nn.Linear(n_hidden, 1)
+        self.problem_slip = nn.Linear(n_hidden, 1)
+        
     def problem_sim_mat(self):
 
         mag = th.linalg.vector_norm(self.problem_embd.weight, dim=1) # P
@@ -254,7 +256,13 @@ class ExpMovAvgModel(nn.Module):
         weight_normed = weight / (weight.sum(dim=2, keepdims=True) + 1e-6)
         
         # Bx1xT * BxTxT = BxT
-        yhat = (y[:,None,:] * weight_normed).sum(2)
+        h = (y[:,None,:] * weight_normed).sum(2)
+        
+        # BxT
+        guess = th.sigmoid(self.problem_guess(x))[:,:,0]
+        slip = th.sigmoid(self.problem_slip(x))[:,:,0]
+
+        yhat = h * (1-slip) + (1-h) * guess 
         
         return th.clamp(yhat, 0.01, 0.99) 
 
