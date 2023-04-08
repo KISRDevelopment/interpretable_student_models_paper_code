@@ -9,25 +9,20 @@ from torch.nn.utils.rnn import pad_sequence
 import metrics 
 import copy 
 
-def main():
-    cfg_path = sys.argv[1]
-    dataset_name = sys.argv[2]
-    output_path = sys.argv[3]
-
+def main(cfg_path, dataset_name, output_path):
+    
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)
 
-    evaluate(cfg, df, splits)
+    results_df, all_embdeddings = evaluate(cfg, df, splits)
+    
+    results_df.to_csv(output_path)
 
-    # results_df, all_params = main(cfg, df, splits)
-
-    # results_df.to_csv(output_path)
-
-    # param_output_path = output_path.replace(".csv", ".params.npy")
-    # np.savez(param_output_path, **all_params)
+    embd_output_path = output_path.replace(".csv", ".embeddings.npy")
+    np.save(embd_output_path, all_embdeddings)
 
 def evaluate(cfg, df, splits, device='cuda:0'):
     n_problems = np.max(df['problem']) + 1
@@ -39,6 +34,7 @@ def evaluate(cfg, df, splits, device='cuda:0'):
     results = []
     all_params = defaultdict(list)
 
+    all_embdeddings = []
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -73,12 +69,11 @@ def evaluate(cfg, df, splits, device='cuda:0'):
 
         ytrue_test, ypred_test = predict(model, test_seqs, n_test_batch_seqs, cfg['n_batch_trials'], device)
         
-        # with th.no_grad():
-        #     param_alpha, param_obs, param_t = model.get_params()
-        #     all_params['alpha'].append(param_alpha.cpu().numpy())
-        #     all_params['obs'].append(param_obs.cpu().numpy())
-        #     all_params['t'].append(param_t.cpu().numpy())
-
+        with th.no_grad():
+            state_dict = model.state_dict()
+            problem_embddings = state_dict['problem_embd.weight'].cpu()
+            all_embdeddings.append(problem_embddings.numpy())
+            
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         
         results.append(run_result)
@@ -89,9 +84,9 @@ def evaluate(cfg, df, splits, device='cuda:0'):
     all_ypred = np.array(all_ypred)
 
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
-    print(results_df)
-
-    return results_df, all_params
+    
+    all_embdeddings = np.array(all_embdeddings)
+    return results_df, all_embdeddings
 
 def train(train_seqs, valid_seqs, n_problems, cfg, device):
 
@@ -286,4 +281,8 @@ class ExpMovAvgModel(nn.Module):
 
 
 if __name__ == "__main__":
-    main()
+    cfg_path = sys.argv[1]
+    dataset_name = sys.argv[2]
+    output_path = sys.argv[3]
+
+    main(cfg_path, dataset_name, output_path)

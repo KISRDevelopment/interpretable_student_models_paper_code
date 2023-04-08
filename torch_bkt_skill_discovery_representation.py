@@ -399,12 +399,11 @@ if __name__ == "__main__":
     # embd_mat = embd_df.loc[sorted(embd_df.index)].to_numpy()
     
     #
-    # run DKT to boostrap problem representations
+    # run Exp Mov Avg to boostrap problem representations
     #
-    import dkt 
-    dkt.main("cfgs/dkt.json", dataset_name, "tmp/dkt.csv")
-    embd_mats = np.load("tmp/dkt.npy")
-
+    import exp_mov_avg 
+    exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
+    embd_mats = np.load("tmp/movavg.embeddings.npy")
 
     splits = np.load("data/splits/%s.npy" % dataset_name)
     results_df, all_params = main(cfg, df, embd_mats, splits)

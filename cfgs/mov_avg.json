@@ -1,5 +1,5 @@
 {
-    "epochs" : 1000,
+    "epochs" : 100,
     "n_hidden" : 10,
     "learning_rate" : 0.01,
     "n_train_batch_seqs" : 10,
