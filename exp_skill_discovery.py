@@ -109,7 +109,7 @@ def main():
             output_path])
 
     #
-    # BKT model with skill discovery (bootstrapped via DKT)
+    # BKT model with skill discovery (bootstrapped via EMA)
     #
     for n_skills in ns_skills:
         print("Number of skills = %d, model = Skill Discovery BKT with Bootstrapping" % n_skills)
