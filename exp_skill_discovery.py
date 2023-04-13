@@ -7,20 +7,34 @@ import subprocess
 import glob 
 
 def main():
-    
+    regenerate = False 
+
     ns_skills = [1, 2, 5, 25, 50]
     n_students = 100
     n_problems_per_skill = 10
+    block_kcs = True
+    has_forgetting = True
+    final_results_path = 'tmp/results_exp_skill_discovery.csv'
+    results_dir = "data/results-sd"
+    dataset_name_tmpl = "skill_discovery_%d"
+
+    #
+    # Random KC ordering
+    #
     block_kcs = False
-    regenerate = False 
-    
     final_results_path = 'tmp/results_exp_skill_discovery_random.csv'
     results_dir = "data/results-sd-random"
     dataset_name_tmpl = "skill_discovery_random_%d"
 
-    # final_results_path = 'tmp/results_exp_skill_discovery.csv'
-    # results_dir = "data/results-sd"
-    # dataset_name_tmpl = "skill_discovery_%d"
+
+    #
+    # No forgetting, Random KC ordering
+    #
+    has_forgetting = False
+    block_kcs = False 
+    final_results_path = 'tmp/results_exp_skill_discovery_random_no_forgetting.csv'
+    results_dir = "data/results-sd-random-no-forgetting"
+    dataset_name_tmpl = "skill_discovery_random_no_forgetting_%d"
 
     os.makedirs(results_dir, exist_ok=True)
 
@@ -36,7 +50,8 @@ def main():
             n_students=n_students, 
             n_skills=n_skills,
             seed=456,
-            block_kcs=block_kcs)
+            block_kcs=block_kcs,
+            has_forgetting=has_forgetting)
         splits = split_dataset.main(df, 5, 5)
         
         df.to_csv("data/datasets/%s.csv" % dataset_file, index=False)

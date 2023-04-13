@@ -5,14 +5,14 @@ from collections import defaultdict
 import split_dataset
 from scipy.stats import qmc
 import itertools
-def main(n_students, n_problems_per_skill, n_skills, seed=None, block_kcs=False):
+def main(n_students, n_problems_per_skill, n_skills, seed=None, block_kcs=False, has_forgetting=True):
     if seed is not None:
         rng.seed(seed)
 
     # pI, pL, pF, pG, pS
     pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
     pLs = [0.01, 0.05, 0.1, 0.2] 
-    pFs = [0.01, 0.05, 0.1, 0.2]
+    pFs = [0.01, 0.05, 0.1, 0.2] if has_forgetting else [0.0]
     pGs = [0.01, 0.05, 0.1, 0.2]
     pSs = [0.01, 0.05, 0.1, 0.2]
     all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
