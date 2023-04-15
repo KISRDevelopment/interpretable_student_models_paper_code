@@ -401,9 +401,16 @@ if __name__ == "__main__":
     #
     # run Exp Mov Avg to boostrap problem representations
     #
-    import exp_mov_avg 
-    exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
-    embd_mats = np.load("tmp/movavg.embeddings.npy")
+    # import exp_mov_avg 
+    # exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
+    # embd_mats = np.load("tmp/movavg.embeddings.npy")
+
+    #
+    # run SAKT to get problem reps
+    #
+    import train_sakt 
+    train_sakt.main("cfgs/sakt.json", dataset_name, "tmp/sakt.csv")
+    embd_mats = np.load("tmp/sakt.embeddings.npy")
 
     splits = np.load("data/splits/%s.npy" % dataset_name)
     results_df, all_params = main(cfg, df, embd_mats, splits)

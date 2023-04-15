@@ -1,0 +1,14 @@
+{
+    "max_length" : 200,
+    "embed_size" : 200,
+    "num_attn_layers" : 1,
+    "num_heads" : 5,
+    "encode_pos" : true,
+    "max_pos" : 10,
+    "drop_prob" : 0.2,
+    "batch_size" : 10,
+    "lr" : 0.001,
+    "grad_clip" : 10,
+    "num_epochs" : 300,
+    "patience" : 10
+}
