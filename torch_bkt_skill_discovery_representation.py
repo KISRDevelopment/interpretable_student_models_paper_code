@@ -199,6 +199,7 @@ def train(train_seqs, valid_seqs, embd_mat, n_kcs, device, learning_rate, epochs
                 model.sample_A(1e-6, True)
                 n_utilized_kcs.append((model._A.sum(0) > 0).sum().cpu().numpy())
                 if ref_labels is not None:
+                    
                     pred_labels = th.argmax(model._A, dim=1).cpu().numpy()
                     rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
                     indecies.append(rand_index)
@@ -303,12 +304,11 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 def main(cfg, df, embd_mats, splits):
     
     if cfg['use_problems']:
-        n_skills = np.max(df['skill']) + 1
+        problems_to_skills = dict(zip(df['problem'], df['skill']))
+
         n_problems = np.max(df['problem']) + 1
-        # A = np.zeros((n_problems, n_skills))
-        # for r in df.itertuples():
-        #     A[r.problem, r.skill] = 1
-        
+        A = np.array([problems_to_skills[p] for p in range(n_problems)])
+        cfg['ref_labels'] = A
         df['skill'] = df['problem']
         
     seqs = to_student_sequences(df)
@@ -343,7 +343,10 @@ def main(cfg, df, embd_mats, splits):
 
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
         
-        embd_mat = embd_mats[s, :, :]
+        if len(embd_mats.shape) == 2:
+            embd_mat = embd_mats
+        else:
+            embd_mat = embd_mats[s, :, :]
         #embd_mat = A 
         embd_mat = th.tensor(embd_mat).float().to('cuda:0')
         model, best_aux = train(train_seqs, valid_seqs, 
@@ -401,18 +404,24 @@ if __name__ == "__main__":
     #
     # run Exp Mov Avg to boostrap problem representations
     #
-    # import exp_mov_avg 
-    # exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
-    # embd_mats = np.load("tmp/movavg.embeddings.npy")
+    import exp_mov_avg 
+    exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
+    embd_mats = np.load("tmp/movavg.embeddings.npy")
 
     #
     # run SAKT to get problem reps
     #
-    import train_sakt 
-    train_sakt.main("cfgs/sakt.json", dataset_name, "tmp/sakt.csv")
-    embd_mats = np.load("tmp/sakt.embeddings.npy")
+    # import train_sakt 
+    # train_sakt.main("cfgs/sakt.json", dataset_name, "tmp/sakt.csv")
+    # embd_mats = np.load("tmp/sakt.embeddings.npy")
 
+    #
+    # load precomputed embdeddings
+    #
+    #embd_mats = np.load("data/datasets/%s.embeddings.npy" % dataset_name)
+    
     splits = np.load("data/splits/%s.npy" % dataset_name)
+    
     results_df, all_params = main(cfg, df, embd_mats, splits)
 
     results_df.to_csv(output_path)
