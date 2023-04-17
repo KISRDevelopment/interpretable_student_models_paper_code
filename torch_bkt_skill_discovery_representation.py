@@ -305,7 +305,7 @@ def main(cfg, df, embd_mats, splits):
     
     if cfg['use_problems']:
         problems_to_skills = dict(zip(df['problem'], df['skill']))
-
+        print(problems_to_skills)
         n_problems = np.max(df['problem']) + 1
         A = np.array([problems_to_skills[p] for p in range(n_problems)])
         cfg['ref_labels'] = A
@@ -389,24 +389,20 @@ if __name__ == "__main__":
 
     cfg_path = sys.argv[1]
     dataset_name = sys.argv[2]
-    output_path = sys.argv[3]
+    embd_path = sys.argv[3]
+    output_path = sys.argv[4]
 
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     
-    # embd_df = pd.read_csv("embeddings/%s_embeddings.csv" % dataset_name).set_index('problem')
-    # int_cols = [c for c in embd_df.columns if str.isdigit(c)]
-    # embd_df = embd_df[int_cols]
-    # embd_mat = embd_df.loc[sorted(embd_df.index)].to_numpy()
-    
     #
     # run Exp Mov Avg to boostrap problem representations
     #
-    import exp_mov_avg 
-    exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
-    embd_mats = np.load("tmp/movavg.embeddings.npy")
+    # import exp_mov_avg 
+    # exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
+    # embd_mats = np.load("tmp/movavg.embeddings.npy")
 
     #
     # run SAKT to get problem reps
@@ -418,8 +414,9 @@ if __name__ == "__main__":
     #
     # load precomputed embdeddings
     #
-    #embd_mats = np.load("data/datasets/%s.embeddings.npy" % dataset_name)
-    
+    embd_mats = np.load(embd_path)
+    print(embd_mats.shape)
+
     splits = np.load("data/splits/%s.npy" % dataset_name)
     
     results_df, all_params = main(cfg, df, embd_mats, splits)

@@ -172,7 +172,7 @@ def generate_df(skc, A, kcseq):
         # flatten trial sequence, either blocked or interleaved
         #
         order = 'C' if kcseq == 'blocked' else 'F'
-        ans_seq = skc[s, kc, :].flatten(order)
+        ans_seq = skc[s, :, :].flatten(order)
         problem_seq = problem_seqs.flatten(order)
         skill_seq = np.tile(np.arange(n_kcs), (n_problems_per_skill,1)).T.flatten(order)
         
@@ -185,8 +185,10 @@ def generate_df(skc, A, kcseq):
             cols["skill"].append(skill_seq[i])
             cols["problem"].append(problem_seq[i])
 
+
+    print(skill_seq)
     df = pd.DataFrame(cols)
-    
+    df['correct'] = df['correct'].astype(int)
     return df 
 
 if __name__ == "__main__":
