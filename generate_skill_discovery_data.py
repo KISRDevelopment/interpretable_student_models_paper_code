@@ -8,112 +8,76 @@ import itertools
 import sklearn.datasets
 import sys 
 from sklearn.neighbors import NearestNeighbors
-
+import os 
 
 def main():
 
-    n_students = int(sys.argv[1]) 
-    n_problems_per_skill = int(sys.argv[2]) 
-    n_skills = int(sys.argv[3])
-    n_features = int(sys.argv[4])
-    target_nn_acc = float(sys.argv[5])
-    kcseq = sys.argv[6]
-    dataset_name = sys.argv[7]
+
+    n_students = 100
+    n_problems_per_skill = 10
+    n_features = 50
+    target_nn_acc = 0.75
     
-    df, probs, A, X = generate(n_students, 
-                           n_problems_per_skill, 
-                           n_skills, 
-                           n_features=n_features, 
-                           target_nn_acc=target_nn_acc,
-                           kcseq=kcseq)
-
-    df.to_csv("data/datasets/%s.csv" % dataset_name, index=False)
-    np.save("data/datasets/%s.embeddings.npy" % dataset_name, X)
-
-    splits = split_dataset.main(df, 5, 5)
-    np.save("data/splits/%s.npy" % dataset_name, splits)
-
-
-def generate(n_students, 
-             n_problems_per_skill, 
-             n_skills,
-             n_features,
-             target_nn_acc,
-             kcseq,
-             seed=None):
+    ns_skills = [1, 5, 25, 50]
     
-    if seed is not None:
-        rng.seed(seed)
+    for n_skills in ns_skills:
+        print("****** Skills = %d ******" % n_skills)
+        
+        #
+        # generate skill parameters
+        #
+        probs = generate_skill_params(n_skills)
 
-    #
-    # Possible parameter combinations
-    #
+        #
+        # generate answers
+        #
+        skc = generate_seqs(n_students, n_problems_per_skill, probs)
+        
+        #
+        # generate problem->skill assignments
+        #
+        X, A = generate_clusters(n_skills, 
+            n_problems_per_skill, 
+            n_features, 
+            target_nn_acc,
+            np.linspace(0.75, 1.25, 25))
+        np.save("data/datasets/sd_%d.embeddings.npy" % n_skills, X)
+
+        #
+        # generate dataframes
+        #
+        df_blocked = generate_df(skc, A, 'blocked')
+        df_blocked.to_csv("data/datasets/sd_%d_blocked.csv" % (n_skills), index=False)
+
+        df_interleaved = generate_df(skc, A, 'interleaved')
+        df_interleaved.to_csv("data/datasets/sd_%d_interleaved.csv" % (n_skills), index=False)
+
+        splits = split_dataset.main(df_blocked, 5, 5)
+
+        #
+        # both scheduled variants use the same split
+        #
+        np.save("data/splits/sd_%d_blocked.npy" % n_skills, splits)
+        np.save("data/splits/sd_%d_interleaved.npy" % n_skills, splits)
+
+
+def generate_skill_params(n_skills):
+   
+    # possible parameter values
     pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
     pLs = [0.01, 0.05, 0.1, 0.2] 
     pFs = [0.01, 0.05, 0.1, 0.2]
     pGs = [0.1, 0.2, 0.3, 0.4]
     pSs = [0.1, 0.2, 0.3, 0.4]
+
     all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
+
     print("Choosing from %d combinations with replacement" % all_prob_combs.shape[0])
+
     probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=True, size=n_skills), :]
     
-    #
-    # generate assignments based on problem representation
-    #
-    X, A = generate_clusters(n_skills, 
-        n_problems_per_skill, 
-        n_features, 
-        target_nn_acc, 
-        np.linspace(0.75, 1.25, 25))
-    #
-    # generate trials
-    #
-    cols = defaultdict(list)
-    kc_one = 0
-    kc_zero = 0
-    for s in range(n_students):
-
-        # initialize state (n_skills,)
-        state = rng.binomial(1, probs[:,0])
-        
-        # generate problem sequence
-        if kcseq == 'blocked':
-            problem_seq = blocked_generator(A)
-        elif kcseq == 'interleaved':
-            problem_seq = interleaved_generator(A)
-        
-        for t in range(problem_seq.shape[0]):
-            problem = problem_seq[t]
-            kc = A[problem]
-            
-            kc_state = state[kc]
-            _, pL, pF, pG, pS = probs[kc, :]
-            
-            # get p(correct|state)
-            if kc_state == 1:
-                pC = 1-pS
-                kc_one += 1
-            else:
-                pC = pG
-                kc_zero += 1
-            
-            ans = rng.binomial(1, pC)
-            cols["student"].append(s)
-            cols["correct"].append(ans)
-            cols["skill"].append(kc)
-            cols["problem"].append(problem)
-                
-            # transition state
-            if kc_state == 0:
-                state[kc] = rng.binomial(1, pL)
-            else:
-                state[kc] = 1 - rng.binomial(1, pF)
-
-    df = pd.DataFrame(cols)
-        
-    print("Mean correct: %0.2f" % np.mean(df['correct']))
-
-    return df, probs, A, X 
+    # n_skills x 5
+    return probs 
 
 def generate_clusters(n_clusters, 
     n_samples_per_cluster, 
@@ -161,32 +125,69 @@ def generate_clusters(n_clusters,
     
     return X, y
 
-def blocked_generator(A):
-    """ KCs are blocked, but problems within the KC are shuffled """
-    n_kcs = np.max(A)+1
-    
-    problem_seq = []
-    for kc in range(n_kcs):
-        kc_problems = np.where(A == kc)[0]
-        np.random.shuffle(kc_problems)
-        problem_seq.extend(kc_problems)
-    
-    problem_seq = np.array(problem_seq)
-    assert np.unique(problem_seq).shape == problem_seq.shape
-    return problem_seq 
 
-def interleaved_generator(A):
-    """ KCs are interleaved but problems within KC are shuffled """
-    n_kcs = np.max(A)+1
+def generate_seqs(n_students, n_problems_per_skill, probs):
+    n_kcs = probs.shape[0]
+
+    skc = np.zeros((n_students, n_kcs, n_problems_per_skill))
+
+    for s in range(n_students):
+        
+        state = rng.binomial(1, probs[:,0])
+        
+        pL = probs[:,1]
+        pF = probs[:,2]
+        pG = probs[:,3]
+        pS = probs[:,4]
+
+        for t in range(n_problems_per_skill):
+            
+            pC = (1 - pS) * state + (1-state) * pG 
+            
+            ans = rng.binomial(1, pC)
+            
+            state = rng.binomial(1, (1 - pF) * state + (1-state) * pL)
+            
+            skc[s, :, t] = ans
+        
+    return skc 
+
+def generate_df(skc, A, kcseq):
+    n_kcs = skc.shape[1]
+    n_problems_per_skill = skc.shape[2]
+
+    cols = defaultdict(list)
+    for s in range(skc.shape[0]):
+        #
+        # create random problem sequence for each KC
+        #
+        problem_seqs = []
+        for kc in range(n_kcs):
+            kc_problems = np.where(A == kc)[0]
+            np.random.shuffle(kc_problems)
+            problem_seqs.append(kc_problems)
+        problem_seqs = np.array(problem_seqs)
+
+        #
+        # flatten trial sequence, either blocked or interleaved
+        #
+        order = 'C' if kcseq == 'blocked' else 'F'
+        ans_seq = skc[s, kc, :].flatten(order)
+        problem_seq = problem_seqs.flatten(order)
+        skill_seq = np.tile(np.arange(n_kcs), (n_problems_per_skill,1)).T.flatten(order)
+        
+        #
+        # generate df
+        #
+        for i in range(ans_seq.shape[0]):
+            cols["student"].append(s)
+            cols["correct"].append(ans_seq[i])
+            cols["skill"].append(skill_seq[i])
+            cols["problem"].append(problem_seq[i])
+
+    df = pd.DataFrame(cols)
     
-    problem_seq = np.zeros(A.shape[0]).astype(int)
-    for kc in range(n_kcs):
-        kc_problems = np.where(A == kc)[0]
-        np.random.shuffle(kc_problems)
-        problem_seq[kc:A.shape[0]:n_kcs] = kc_problems
-    
-    assert np.unique(problem_seq).shape == problem_seq.shape
-    return problem_seq 
+    return df 
 
 if __name__ == "__main__":
     main()
