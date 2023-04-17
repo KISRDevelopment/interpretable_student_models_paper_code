@@ -86,6 +86,8 @@ class BktModel(nn.Module):
 
         self.embd_mat = embd_mat
         self.kc_membership_func = nn.Linear(embd_mat.shape[1], n_latent_kcs)
+        # with th.no_grad():
+        #     self.kc_membership_func.weight[n_initial_kcs:,:] = -10
 
         self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
         self.n_kcs = n_kcs
@@ -305,7 +307,6 @@ def main(cfg, df, embd_mats, splits):
     
     if cfg['use_problems']:
         problems_to_skills = dict(zip(df['problem'], df['skill']))
-        print(problems_to_skills)
         n_problems = np.max(df['problem']) + 1
         A = np.array([problems_to_skills[p] for p in range(n_problems)])
         cfg['ref_labels'] = A
