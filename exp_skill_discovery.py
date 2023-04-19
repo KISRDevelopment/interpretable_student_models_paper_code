@@ -19,6 +19,19 @@ def main():
         dataset_file = "sd_%d_%s" % (n_skills, kcseq)
         
         #
+        # BKT model that just uses problem IDs as skills
+        #
+        output_path = "%s/bkt-no-sd_%d.csv" % (results_dir, n_skills)
+        cfg_path = "cfgs/bkt_no_sd.json"
+        if os.path.exists(output_path):
+            print("Ignoring %s" % output_path)
+        else:
+            subprocess.call(['python', "torch_bkt.py", 
+                cfg_path,
+                dataset_file, 
+                output_path])
+
+        #
         # Cheating BKT model with access to true Q-matrix
         #
         output_path = "%s/bkt-cheating_%d.csv" % (results_dir, n_skills)
@@ -58,6 +71,24 @@ def main():
                 "./data/datasets/sd_%d.embeddings.npy" % n_skills,
                 output_path])
         
+        #
+        # KC Discovery without problem representations
+        #
+        embds = np.load("./data/datasets/sd_%d.embeddings.npy" % n_skills)
+        one_hot = np.eye(embds.shape[0])
+        np.save("./tmp/sd_%d.onehot.embeddings.npy" % n_skills, one_hot)
+
+        output_path = "%s/bkt-sd-norep_%d.csv" % (results_dir, n_skills)
+        cfg_path = "cfgs/exp_sd_bkt-sd.json"
+        if os.path.exists(output_path):
+            print("Ignoring %s" % output_path)
+        else:
+            subprocess.call(['python', "torch_bkt_skill_discovery_representation.py", 
+                cfg_path,
+                dataset_file, 
+                "./tmp/sd_%d.onehot.embeddings.npy" % n_skills,
+                output_path])
+
     results = generate_results(results_dir)
     #results.to_csv(final_results_path, index=False)
 

@@ -13,36 +13,39 @@ import copy
 import json
 import time 
 import sklearn.metrics
+from scipy.stats import qmc
+
 class MultiHmmCell(jit.ScriptModule):
     
-    def __init__(self, n_states, n_outputs, n_chains):
+    def __init__(self):
         super(MultiHmmCell, self).__init__()
         
-        self.n_states = n_states
-        self.n_outputs = n_outputs
-        self.n_chains = n_chains 
-
-        # [n_hidden,n_hidden] (Target,Source)
-        self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
-        self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
-        self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
-        
     @jit.script_method
-    def forward(self, obs: Tensor, chain: Tensor) -> Tensor:
+    def forward(self, obs: Tensor, chain: Tensor, 
+        trans_logits: Tensor, 
+        obs_logits: Tensor, 
+        init_logits: Tensor) -> Tensor:
         """
-            obs: [n_batch, t]
-            chain: [n_batch, t, n_chains]
+            Input:
+                obs: [n_batch, t]
+                chain: [n_batch, t, n_chains]
+                trans_logits: [n_chains, n_states, n_states] (Target, Source)
+                obs_logits: [n_chains, n_states, n_outputs]
+                init_logits: [n_chains, n_states]
             output:
-            [n_batch, t, n_outputs]
+                [n_batch, t, n_outputs]
         """
+
+        n_chains, n_states, n_outputs = obs_logits.shape 
+
         outputs = th.jit.annotate(List[Tensor], [])
         
         n_batch, _ = obs.shape
         batch_idx = th.arange(n_batch)
 
-        log_alpha = F.log_softmax(self.init_logits, dim=1) # n_chains x n_states
-        log_obs = F.log_softmax(self.obs_logits, dim=2) # n_chains x n_states x n_obs
-        log_t = F.log_softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
+        log_alpha = F.log_softmax(init_logits, dim=1) # n_chains x n_states
+        log_obs = F.log_softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
+        log_t = F.log_softmax(trans_logits, dim=1) # n_chains x n_states x n_states
         
         # B X C X S
         log_alpha = th.tile(log_alpha, (n_batch, 1, 1))
@@ -79,59 +82,91 @@ class MultiHmmCell(jit.ScriptModule):
         return outputs
 
 class BktModel(nn.Module):
-    def __init__(self, embd_mat, n_latent_kcs, n_initial_kcs):
+    def __init__(self, n_problems, n_latent_kcs, latent_dim, **kwargs):
         super(BktModel, self).__init__()
         
-        n_kcs = embd_mat.shape[0]
+        self.problem_embd = nn.Embedding(n_problems, latent_dim)
+        
+        self.kc_embd = nn.Embedding(n_latent_kcs, latent_dim)
+        
+        self.kc_logits_f = nn.Linear(latent_dim, 5) # BKT probabilities, pL, pF, pG, pS, pI0
 
-        self.embd_mat = embd_mat
-        self.kc_membership_func = nn.Linear(embd_mat.shape[1], n_latent_kcs)
-        # with th.no_grad():
-        #     self.kc_membership_func.bias[n_initial_kcs:] = -10
-             
-        self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
-        self.n_kcs = n_kcs
+        self.loglam = nn.Parameter(th.randn(1).cuda())
+
+        self.hmm = MultiHmmCell()
+        
+        self.n_problems = n_problems
         self.n_latent_kcs = n_latent_kcs
-
+        self.kcs_range = th.arange(self.n_latent_kcs).cuda() / self.n_latent_kcs
         self._A = None
         
     def sample_A(self, tau, hard_samples):
-        """
-            embd_mat: n_kcs x n_dim
-        """
-
-        membership_logits = self.kc_membership_func(self.embd_mat) # n_kcs x n_latent_kcs
-
+        membership_logits = self.problem_embd.weight @ self.kc_embd.weight.T  # Problems x Latent KCs
+        lam = self.loglam.exp()
+        decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
+        
+        membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
         self._A = nn.functional.gumbel_softmax(membership_logits, hard=hard_samples, tau=tau, dim=1)
         
-    def forward(self, corr, kc):
-        actual_kc = self._A[kc]
-        return self.hmm(corr, actual_kc)
+    def forward(self, corr, problem):
+        actual_kc = self._A[problem]
+        return self.forward_with_actual_kc(corr, actual_kc)
+
+    def forward_with_actual_kc(self, corr, actual_kc):
+        trans_logits, obs_logits, init_logits = self._get_kc_params()
+        return self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
+
+    def _get_kc_params(self):
+        kc_logits = self.kc_logits_f(self.kc_embd.weight) # Latent KCs x 5
+        trans_logits = th.hstack((-kc_logits[:, [0]], # 1-pL
+                                  kc_logits[:, [1]],  # pF
+                                  kc_logits[:, [0]],  # pL
+                                  -kc_logits[:, [1]])).reshape((-1, 2, 2)) # 1-pF (Latent KCs x 2 x 2)
+        obs_logits = th.hstack((-kc_logits[:, [2]], # 1-pG
+                                  kc_logits[:, [2]],  # pG
+                                  kc_logits[:, [3]],  # pS
+                                  -kc_logits[:, [3]])).reshape((-1, 2, 2)) # 1-pS (Latent KCs x 2 x 2)
+        init_logits = th.hstack((-kc_logits[:, [4]], kc_logits[:, [4]])) # (Latent KCs x 2)
+
+        return trans_logits, obs_logits, init_logits
 
     def get_params(self):
-        alpha = F.softmax(self.hmm.init_logits, dim=1) # n_chains x n_states
-        obs = F.softmax(self.hmm.obs_logits, dim=2) # n_chains x n_states x n_obs
-        t = F.softmax(self.hmm.trans_logits, dim=1) # n_chains x n_states x n_states
+        with th.no_grad():
+            trans_logits, obs_logits, init_logits = self._get_kc_params()
 
-        membership_logits = self.kc_membership_func(self.embd_mat) # n_kcs x n_latent_kcs
+            alpha = F.softmax(init_logits, dim=1) # n_chains x n_states
+            obs = F.softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
+            t = F.softmax(trans_logits, dim=1) # n_chains x n_states x n_states
 
-        kc_membership_probs = F.softmax(membership_logits, dim=1) # n_problems * n_latent_kcs
+            membership_logits = self.problem_embd.weight @ self.kc_embd.weight.T  # Problems x Latent KCs
+            
+            kc_membership_probs = F.softmax(membership_logits, dim=1) # n_problems * n_latent_kcs
 
-        return alpha, obs, t, kc_membership_probs
+            return alpha, obs, t, kc_membership_probs
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
         "obs" : [],
-        "kc" : []
+        "problem" : []
     })
     for r in df.itertuples():
         seqs[r.student]["obs"].append(r.correct)
-        seqs[r.student]["kc"].append(r.skill)
+        seqs[r.student]["problem"].append(r.problem)
     return seqs
 
-def train(train_seqs, valid_seqs, embd_mat, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
+def train(train_seqs, 
+          valid_seqs, 
+          n_problems, 
+          n_latent_kcs,
+          latent_dim,
+          device, 
+          learning_rate, 
+          epochs, 
+          n_batch_seqs, 
+          stopping_rule, 
+          tau, **kwargs):
 
-    model = BktModel(embd_mat, kwargs['n_latent_kcs'], kwargs['n_initial_kcs'])
+    model = BktModel(n_problems, n_latent_kcs, latent_dim)
     model = model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
@@ -142,46 +177,43 @@ def train(train_seqs, valid_seqs, embd_mat, n_kcs, device, learning_rate, epochs
         np.random.shuffle(train_seqs)
         losses = []
 
-        prev_n_utilized_kcs = kwargs['n_initial_kcs']
         for offset in range(0, len(train_seqs), n_batch_seqs):
             end = offset + n_batch_seqs
             batch_seqs = train_seqs[offset:end]
 
             batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
+            batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             
             rep_obs_seqs = []
-            rep_kc_seqs = []
+            rep_actual_kc_seqs = []
             rep_mask_seqs = []
             rep_utilized_kcs = []
             for r in range(kwargs['n_train_samples']):
                 model.sample_A(tau, kwargs['hard_samples'])
                 
-                actual_kc = model._A[batch_kc_seqs] #th.matmul(kc, self._A) # B X T X LC
+                actual_kc = model._A[batch_problem_seqs] # # B X T X LC
                 rep_obs_seqs.append(batch_obs_seqs)
-                rep_kc_seqs.append(actual_kc)
+                rep_actual_kc_seqs.append(actual_kc)
                 rep_mask_seqs.append(batch_mask_seqs)
             
             final_obs_seq = th.vstack(rep_obs_seqs).to(device)
-            final_kc_seq = th.vstack(rep_kc_seqs).to(device)
+            final_kc_seq = th.vstack(rep_actual_kc_seqs).to(device)
             final_mask_seq = th.vstack(rep_mask_seqs).to(device)
             mask_ix = final_mask_seq.flatten()
 
-            output = model.hmm(final_obs_seq, final_kc_seq)
+            output = model.forward_with_actual_kc(final_obs_seq, final_kc_seq)
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
-             
-            train_loss = train_loss[mask_ix].mean()
+            
+            train_loss = train_loss[mask_ix].mean() + kwargs['reg'] * model.loglam.exp()
 
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
 
             losses.append(train_loss.item())
-            #print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / n_batch_seqs )))
-        # tau = np.maximum(0.5, tau * 0.95)
-        # print("new tau: %0.2f" % tau)
+        
         mean_train_loss = np.mean(losses)
 
         #
@@ -246,10 +278,10 @@ def predict(model, seqs, n_batch_seqs, device, n_samples):
                 batch_seqs = seqs[offset:end]
 
                 batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-                batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
+                batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
                 batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
 
-                output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
+                output = model(batch_obs_seqs.to(device), batch_problem_seqs.to(device)).cpu()
                     
                 ypred = output[:, :, 1].flatten()
                 ytrue = batch_obs_seqs.flatten()
@@ -303,14 +335,12 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 
     return stop
 
-def main(cfg, df, embd_mats, splits):
+def main(cfg, df, splits):
     
-    if cfg['use_problems']:
-        problems_to_skills = dict(zip(df['problem'], df['skill']))
-        n_problems = np.max(df['problem']) + 1
-        A = np.array([problems_to_skills[p] for p in range(n_problems)])
-        cfg['ref_labels'] = A
-        df['skill'] = df['problem']
+    problems_to_skills = dict(zip(df['problem'], df['skill']))
+    n_problems = np.max(df['problem']) + 1
+    A = np.array([problems_to_skills[p] for p in range(n_problems)])
+    cfg['ref_labels'] = A
         
     seqs = to_student_sequences(df)
     
@@ -338,21 +368,16 @@ def main(cfg, df, embd_mats, splits):
         valid_seqs = [seqs[s] for s in valid_students]
         test_seqs = [seqs[s] for s in test_students]
 
-        n_kcs = int(np.max(df['skill']) + 1)
+        n_problems = int(np.max(df['problem']) + 1)
 
         tic = time.perf_counter()
 
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
         
-        if len(embd_mats.shape) == 2:
-            embd_mat = embd_mats
-        else:
-            embd_mat = embd_mats[s, :, :]
-        #embd_mat = A 
-        embd_mat = th.tensor(embd_mat).float().to('cuda:0')
-        model, best_aux = train(train_seqs, valid_seqs, 
-            embd_mat=embd_mat,
-            n_kcs=n_kcs, 
+        model, best_aux = train(
+            train_seqs, 
+            valid_seqs, 
+            n_problems=n_problems, 
             device='cuda:0',
             stopping_rule=stopping_rule,
             **cfg)
@@ -390,37 +415,16 @@ if __name__ == "__main__":
 
     cfg_path = sys.argv[1]
     dataset_name = sys.argv[2]
-    embd_path = sys.argv[3]
-    output_path = sys.argv[4]
+    output_path = sys.argv[3]
 
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     
-    #
-    # run Exp Mov Avg to boostrap problem representations
-    #
-    # import exp_mov_avg 
-    # exp_mov_avg.main("cfgs/mov_avg.json", dataset_name, "tmp/movavg.csv")
-    # embd_mats = np.load("tmp/movavg.embeddings.npy")
-
-    #
-    # run SAKT to get problem reps
-    #
-    # import train_sakt 
-    # train_sakt.main("cfgs/sakt.json", dataset_name, "tmp/sakt.csv")
-    # embd_mats = np.load("tmp/sakt.embeddings.npy")
-
-    #
-    # load precomputed embdeddings
-    #
-    embd_mats = np.load(embd_path)
-    print(embd_mats.shape)
-
     splits = np.load("data/splits/%s.npy" % dataset_name)
     
-    results_df, all_params = main(cfg, df, embd_mats, splits)
+    results_df, all_params = main(cfg, df, splits)
 
     results_df.to_csv(output_path)
 
