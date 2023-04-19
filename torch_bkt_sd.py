@@ -413,8 +413,6 @@ class BktModel(nn.Module):
         
         #
         # Problem representations
-        # If problems have features, then we use linear transform
-        # otherwise we use the more efficient embedding
         #
         self.problem_embd = nn.Linear(problem_dim, latent_dim)
         
@@ -433,6 +431,7 @@ class BktModel(nn.Module):
         # controls the number of available KCs
         #
         self.loglam = nn.Parameter(th.randn(1).cuda())
+        self.R = nn.Parameter(th.randn(latent_dim, latent_dim))
 
         #
         # BKT Module
@@ -463,12 +462,12 @@ class BktModel(nn.Module):
         problem_embeddings = self.problem_embd(problem_reps)
         
         # compute logits
-        membership_logits = problem_embeddings @ self.kc_embd.weight.T  # Problems x Latent KCs
+        membership_logits = (problem_embeddings @ self.R) @ self.kc_embd.weight.T  # Problems x Latent KCs
         
         # reduce number of available KCs according to lambda
         lam = self.loglam.exp()
-        decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
-        membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
+        #decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
+        #membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
 
         return membership_logits
 
