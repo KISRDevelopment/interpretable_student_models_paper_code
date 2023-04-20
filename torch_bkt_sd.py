@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.jit as jit
 from torch import Tensor
-from typing import List
+from typing import List, Tuple
 import pandas as pd 
 from collections import defaultdict
 from torch.nn.utils.rnn import pad_sequence
@@ -52,7 +52,14 @@ def run(cfg, df, splits, problem_rep_mat):
     n_problems = np.max(df['problem']) + 1
     A = np.array([problems_to_skills[p] for p in range(n_problems)])
     cfg['ref_labels'] = A
-        
+    
+    print("# of problems: %d" % n_problems)
+    gdf = df.groupby('problem')['student'].count()
+    lower = np.percentile(gdf, q=2.5)
+    upper = np.percentile(gdf, q=97.5)
+    print("95%% occurance range: %d-%d" % (lower,upper))
+    print("# of problems occuring at least 10 times: %d" % np.sum(gdf >= 10))
+    #exit()
     seqs = to_student_sequences(df)
     
     all_ytrue = []
@@ -90,7 +97,9 @@ def run(cfg, df, splits, problem_rep_mat):
         
         split_rep_mat = problem_rep_mat
         if problem_rep_mat is None:
-            split_rep_mat = position_encode_problems.encode_problem_pos_distribs(train_df, n_problems)
+            #split_rep_mat = position_encode_problems.encode_problem_pos_distribs(train_df, n_problems)
+            split_rep_mat = position_encode_problems.encode_problem_ids(train_df, n_problems)
+            
             split_rep_mat = th.tensor(split_rep_mat).float().to('cuda:0')
         else:
             if len(split_rep_mat.shape) > 2:
@@ -155,7 +164,8 @@ def train(train_seqs,
           device, 
           learning_rate, 
           epochs, 
-          n_batch_seqs, 
+          n_batch_seqs,
+          n_batch_trials, 
           stopping_rule, 
           tau, **kwargs):
 
@@ -177,20 +187,31 @@ def train(train_seqs,
             end = offset + n_batch_seqs
             batch_seqs = train_seqs[offset:end]
 
+            # determine # of problems in a batch because we don't want to handle
+            # all problems 
+            problems_in_batch = sorted(set.union(*[set(s['problem']) for s in batch_seqs]))
+            
+            # reindex
+            problem_batch_idx = dict(zip(problems_in_batch, range(len(problems_in_batch))))
+
             batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
+            batch_problem_seqs = pad_sequence([th.tensor([ problem_batch_idx[p] for p in s['problem']]) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             
+            print("# of problems in batch: %d" % len(problems_in_batch))
+
             rep_obs_seqs = []
             rep_actual_kc_seqs = []
             rep_mask_seqs = []
             rep_utilized_kcs = []
             for r in range(kwargs['n_train_samples']):
+                print("Sample %d" % r)
 
                 #
                 # sample assignment
+                # Problems in batch x Latent KCs
                 #
-                A = model.sample_A(problem_rep_mat, tau, kwargs['hard_samples'])
+                A = model.sample_A(problem_rep_mat[problems_in_batch, :], tau, kwargs['hard_samples'])
                 
                 # 
                 # translate problem to KC
@@ -212,7 +233,8 @@ def train(train_seqs,
             final_mask_seq = th.vstack(rep_mask_seqs).to(device)
             mask_ix = final_mask_seq.flatten()
 
-            output = model.forward(final_obs_seq, final_kc_seq)
+            print("Executing Forward Operation")
+            output = model.forward(final_obs_seq, final_kc_seq, n_batch_trials)
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
             
@@ -226,11 +248,12 @@ def train(train_seqs,
         
         mean_train_loss = np.mean(losses)
 
+        print("Running validation")
         #
         # Validation
         #
         ytrue, ypred = predict(model, valid_seqs, problem_rep_mat, kwargs['n_test_batch_seqs'], device, kwargs['n_valid_samples'])
-
+        print("Done.")
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         
         rand_index = 0
@@ -284,26 +307,31 @@ def predict(model, seqs, problem_rep_mat, n_batch_seqs, device, n_samples):
             #
             # draw sample assignment
             #
-            A = model.sample_A(problem_rep_mat, 1e-6, True)
 
+            A = model.sample_A(problem_rep_mat, 1e-6, True)
+            
             for offset in range(0, len(seqs), n_batch_seqs):
                 end = offset + n_batch_seqs
                 batch_seqs = seqs[offset:end]
 
-                batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-                batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0)
+                batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
+                batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(device)
                 batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
 
                 actual_kc = A[batch_problem_seqs]
 
-                output = model(batch_obs_seqs.to(device), actual_kc).cpu()
-                    
+                print("Batch offset %d (len: %d)" % (offset, len(seqs)))
+                print(device)
+                print(batch_obs_seqs.shape)
+                print(actual_kc.shape)
+                output = model(batch_obs_seqs, actual_kc, n_batch_trials=500).cpu()
+                print("Done.")
                 ypred = output[:, :, 1].flatten()
                 ytrue = batch_obs_seqs.flatten()
                 mask_ix = batch_mask_seqs.flatten()
                     
                 ypred = ypred[mask_ix].numpy()
-                ytrue = ytrue[mask_ix].numpy()
+                ytrue = ytrue[mask_ix].cpu().numpy()
 
                 sample_ypred.append(ypred)
                 all_ytrue.append(ytrue)
@@ -350,72 +378,6 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 
     return stop
 
-class MultiHmmCell(jit.ScriptModule):
-    
-    def __init__(self):
-        super(MultiHmmCell, self).__init__()
-        
-    @jit.script_method
-    def forward(self, obs: Tensor, chain: Tensor, 
-        trans_logits: Tensor, 
-        obs_logits: Tensor, 
-        init_logits: Tensor) -> Tensor:
-        """
-            Input:
-                obs: [n_batch, t]
-                chain: [n_batch, t, n_chains]
-                trans_logits: [n_chains, n_states, n_states] (Target, Source)
-                obs_logits: [n_chains, n_states, n_outputs]
-                init_logits: [n_chains, n_states]
-            output:
-                [n_batch, t, n_outputs]
-        """
-
-        n_chains, n_states, n_outputs = obs_logits.shape 
-
-        outputs = th.jit.annotate(List[Tensor], [])
-        
-        n_batch, _ = obs.shape
-        batch_idx = th.arange(n_batch)
-
-        log_alpha = F.log_softmax(init_logits, dim=1) # n_chains x n_states
-        log_obs = F.log_softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
-        log_t = F.log_softmax(trans_logits, dim=1) # n_chains x n_states x n_states
-        
-        # B X C X S
-        log_alpha = th.tile(log_alpha, (n_batch, 1, 1))
-        for i in range(0, obs.shape[1]):
-            curr_chain = chain[:,i,:] # B X C
-            
-            # predict
-            a1 = (curr_chain[:,:,None, None] * log_obs[None,:,:,:]).sum(1) # B X S X O
-            a2 = (curr_chain[:,:,None] * log_alpha).sum(1) # BXCX1 * BXCXS = BXS
-
-            # B X S X O + B X S X 1
-            log_py = th.logsumexp(a1 + a2[:,:,None], dim=1)  # B X O
-            
-            log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
-            outputs += [log_py]
-
-            # update
-            curr_y = obs[:,i]
-            a1 = th.permute(log_obs[:,:,curr_y], (2, 0, 1)) # B X C X S
-            log_py = (a1 * curr_chain[:,:,None]).sum(1) # B X S
-            
-
-            a1 = (log_alpha * curr_chain[:,:,None]).sum(1) # BxCxS * BxCx1 = BxS
-            a2 = (log_t[None,:,:,:] * curr_chain[:,:,None,None]).sum(1) # 1xCxSxS * BxCx1x1 = BxSxS
-            a3 = th.logsumexp(log_py[:,None,:] + a1[:,None,:] + a2, dim=2)
-
-            # B x 1 X S + B x 1 x S + B x S x S = B x S
-            log_alpha = (1 - curr_chain[:,:,None]) * log_alpha + curr_chain[:,:,None] * a3[:,None,:]
-        
-        
-        outputs = th.stack(outputs)
-        outputs = th.transpose(outputs, 0, 1)
-        
-        return outputs
-
 class BktModel(nn.Module):
     def __init__(self, n_latent_kcs, latent_dim, problem_dim, **kwargs):
         super(BktModel, self).__init__()
@@ -456,6 +418,7 @@ class BktModel(nn.Module):
         self.n_latent_kcs = n_latent_kcs
         self.kcs_range = th.arange(self.n_latent_kcs).cuda() / self.n_latent_kcs
         
+
     def sample_A(self, problem_reps, tau, hard_samples):
         """
             problem_reps: P x problem_dim where P is # of problems
@@ -485,9 +448,32 @@ class BktModel(nn.Module):
 
         return membership_logits
 
-    def forward(self, corr, actual_kc):
+    def forward(self, corr, actual_kc, n_batch_trials):
         trans_logits, obs_logits, init_logits = self._get_kc_params()
-        return self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
+        if n_batch_trials == 0:
+            logits, log_alpha = self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
+            return logits 
+        
+        n_trials = corr.shape[1]
+
+        batch_logits = []
+        for i in range(0, n_trials, n_batch_trials):
+            to_trial = i + n_batch_trials
+            corr_block = corr[:, i:to_trial]
+            actual_kc_block = actual_kc[:, i:to_trial, :]
+            
+            if i == 0:
+                logits, log_alpha = self.hmm(corr_block, actual_kc_block, trans_logits, obs_logits, init_logits)
+            else:
+                log_alpha = log_alpha.detach()
+                logits, log_alpha = self.hmm.forward_given_alpha(corr_block, actual_kc_block, 
+                    trans_logits, obs_logits, init_logits, log_alpha)
+            
+            batch_logits.append(logits)
+        
+        return th.concat(batch_logits, dim=1)
+
+        #return self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
 
     def _get_kc_params(self):
         kc_logits = self.kc_logits_f(self.kc_embd.weight) # Latent KCs x 5
@@ -515,6 +501,87 @@ class BktModel(nn.Module):
             kc_membership_probs = F.softmax(membership_logits, dim=1) # n_problems * n_latent_kcs
 
             return alpha, obs, t, kc_membership_probs
+
+
+class MultiHmmCell(jit.ScriptModule):
+    
+    def __init__(self):
+        super(MultiHmmCell, self).__init__()
+
+    @jit.script_method
+    def forward(self, obs: Tensor, chain: Tensor, 
+        trans_logits: Tensor, 
+        obs_logits: Tensor, 
+        init_logits: Tensor) -> Tuple[Tensor, Tensor]:
+
+        n_batch = obs.shape[0]
+        log_alpha = F.log_softmax(init_logits, dim=1) # n_chains x n_states
+        log_alpha = th.tile(log_alpha, (n_batch, 1, 1)) # batch x chains x states
+        return self.forward_given_alpha(obs, chain, trans_logits, obs_logits, init_logits, log_alpha)
+    
+    @jit.script_method
+    def forward_given_alpha(self, obs: Tensor, chain: Tensor, 
+        trans_logits: Tensor, 
+        obs_logits: Tensor, 
+        init_logits: Tensor,
+        log_alpha: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+            Input:
+                obs: [n_batch, t]
+                chain: [n_batch, t, n_chains]
+                trans_logits: [n_chains, n_states, n_states] (Target, Source)
+                obs_logits: [n_chains, n_states, n_outputs]
+                init_logits: [n_chains, n_states]
+                log_alpha: [n_batch, n_chains, n_states]
+            output:
+                logits: [n_batch, t, n_outputs]
+                log_alpha: [n_batch, n_chains, n_states]
+        """
+
+        n_chains, n_states, n_outputs = obs_logits.shape 
+
+        outputs = th.jit.annotate(List[Tensor], [])
+        
+        n_batch, _ = obs.shape
+        batch_idx = th.arange(n_batch)
+
+        
+        log_obs = F.log_softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
+        log_t = F.log_softmax(trans_logits, dim=1) # n_chains x n_states x n_states
+        
+        # B X C X S
+        for i in range(0, obs.shape[1]):
+            curr_chain = chain[:,i,:] # B X C
+            
+            # predict
+            a1 = (curr_chain[:,:,None, None] * log_obs[None,:,:,:]).sum(1) # B X S X O
+            a2 = (curr_chain[:,:,None] * log_alpha).sum(1) # BXCX1 * BXCXS = BXS
+
+            # B X S X O + B X S X 1
+            log_py = th.logsumexp(a1 + a2[:,:,None], dim=1)  # B X O
+            
+            log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
+            outputs += [log_py]
+
+            # update
+            curr_y = obs[:,i]
+            a1 = th.permute(log_obs[:,:,curr_y], (2, 0, 1)) # B X C X S
+            log_py = (a1 * curr_chain[:,:,None]).sum(1) # B X S
+            
+
+            a1 = (log_alpha * curr_chain[:,:,None]).sum(1) # BxCxS * BxCx1 = BxS
+            a2 = (log_t[None,:,:,:] * curr_chain[:,:,None,None]).sum(1) # 1xCxSxS * BxCx1x1 = BxSxS
+            a3 = th.logsumexp(log_py[:,None,:] + a1[:,None,:] + a2, dim=2)
+
+            # B x 1 X S + B x 1 x S + B x S x S = B x S
+            log_alpha = (1 - curr_chain[:,:,None]) * log_alpha + curr_chain[:,:,None] * a3[:,None,:]
+        
+        
+        outputs = th.stack(outputs)
+        outputs = th.transpose(outputs, 0, 1)
+        
+        return outputs, log_alpha
+
 
 if __name__ == "__main__":
     main()

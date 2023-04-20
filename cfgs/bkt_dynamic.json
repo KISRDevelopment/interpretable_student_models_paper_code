@@ -3,14 +3,15 @@
     "epochs" : 100, 
     "patience" : 10,
     "tau" : 1.5,
-    "n_latent_kcs" : 100,
+    "n_latent_kcs" : 5,
     "latent_dim" : 10,
     "reg" : 0,
     "n_batch_seqs" : 50,
-    "n_test_batch_seqs" : 500,
+    "n_batch_trials" : 50,
+    "n_test_batch_seqs" : 50,
     "hard_samples" : false,
     "ref_labels" : null,
     "n_valid_samples" : 50,
     "n_test_samples" : 50,
-    "n_train_samples" : 20
+    "n_train_samples" : 10
 }
