@@ -12,5 +12,5 @@
     "ref_labels" : null,
     "n_valid_samples" : 50,
     "n_test_samples" : 50,
-    "n_train_samples" : 10
+    "n_train_samples" : 20
 }

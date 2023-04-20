@@ -16,41 +16,39 @@ def main():
     #P = encode_problem_positions(df, d, n_problems)
     P = encode_problem_pos_distribs(df, n_problems)
     print(P)
-def encode_problem_positions(df, d, n_problems):
 
-
-    problem_pos = defaultdict(list)
-    problem_seqs = defaultdict(list)
-    for r in df.itertuples():
-        problem_seqs[r.student].append(r.problem)
-        problem_pos[r.problem].append(encode_pos(len(problem_seqs[r.student])-1, d))
-    
-    P = np.zeros((n_problems, d))
-    for problem, positions in problem_pos.items():
-        P[problem, :] = np.sum(np.vstack(positions).T, axis=1)
-    
-    return P 
     
 def encode_problem_pos_distribs(df, n_problems):
 
-    problem_pos = defaultdict(list)
-    problem_seqs = defaultdict(list)
-    max_seq_len = 0
-    for r in df.itertuples():
-        problem_seqs[r.student].append(r.problem)
-        problem_pos[r.problem].append(len(problem_seqs[r.student])-1)
-        max_seq_len = max(max_seq_len, len(problem_seqs[r.student]))
+    gdf = df.groupby('student')['student'].count()
+
+    max_seq_len = np.max(gdf)
     
-    print("Maximum sequence length: %d" % max_seq_len)
+    seqs = defaultdict(lambda: {
+        "problem" : [],
+        "correct" : []
+    })
+    for r in df.itertuples():
+        seqs[r.student]['problem'].append(r.problem)
+        seqs[r.student]['correct'].append(r.correct)
+    
 
     P = np.zeros((n_problems, max_seq_len))
-    for problem, positions in problem_pos.items():
-        for pos in positions:
-            P[problem, pos] = P[problem, pos] + 1
-        P[problem, :] = P[problem, :] / len(positions)
+    Pc = np.zeros((n_problems, max_seq_len))
+
+    for student in seqs.keys():
+        problems = seqs[student]['problem']
+        corrects = seqs[student]['correct']
+        for t in range(len(problems)):
+            problem = problems[t]
+            correct = corrects[t]
+            P[problem, t] += 1
+            Pc[problem, t] += correct
     
-    
-    return P
+    P = P / np.sum(P, axis=1, keepdims=True)
+    Pc = Pc / np.sum(Pc, axis=1, keepdims=True)
+     
+    return np.hstack((P, Pc))
     
     
 
