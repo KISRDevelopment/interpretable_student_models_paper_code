@@ -14,6 +14,7 @@ import json
 import time 
 import sklearn.metrics
 from scipy.stats import qmc
+import position_encode_problems 
 
 def main():
     import sys
@@ -60,13 +61,13 @@ def run(cfg, df, splits, problem_rep_mat):
     results = []
     all_params = defaultdict(list)
 
-    if problem_rep_mat is None:
-        problem_rep_mat = np.eye(n_problems)
+    if problem_rep_mat is not None:
+        problem_rep_mat = th.tensor(problem_rep_mat).float().to('cuda:0')
     
-    problem_rep_mat = th.tensor(problem_rep_mat).float().to('cuda:0')
 
     for s in range(splits.shape[0]):
         split = splits[s, :]
+
 
         train_ix = split == 2
         valid_ix = split == 1
@@ -88,8 +89,12 @@ def run(cfg, df, splits, problem_rep_mat):
         stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
         
         split_rep_mat = problem_rep_mat
-        if len(split_rep_mat.shape) > 2:
-            split_rep_mat = problem_rep_mat[i,:,:]
+        if problem_rep_mat is None:
+            split_rep_mat = position_encode_problems.encode_problem_pos_distribs(train_df, n_problems)
+            split_rep_mat = th.tensor(split_rep_mat).float().to('cuda:0')
+        else:
+            if len(split_rep_mat.shape) > 2:
+                split_rep_mat = problem_rep_mat[s,:,:]
         
         model, best_aux = train(
             train_seqs, 
@@ -98,6 +103,10 @@ def run(cfg, df, splits, problem_rep_mat):
             device='cuda:0',
             stopping_rule=stopping_rule,
             **cfg)
+        
+        if problem_rep_mat is None:
+            split_rep_mat = position_encode_problems.encode_problem_pos_distribs(df[train_ix | valid_ix], n_problems)
+            split_rep_mat = th.tensor(split_rep_mat).float().to('cuda:0')
 
         ytrue_test, log_ypred_test = predict(model, test_seqs, split_rep_mat, cfg['n_test_batch_seqs'], 'cuda:0', cfg['n_test_samples'])
         toc = time.perf_counter()
@@ -105,7 +114,7 @@ def run(cfg, df, splits, problem_rep_mat):
         ypred_test = np.exp(log_ypred_test)
 
         with th.no_grad():
-            param_alpha, param_obs, param_t, Aprior = model.get_params(problem_rep_mat)
+            param_alpha, param_obs, param_t, Aprior = model.get_params(split_rep_mat)
             all_params['alpha'].append(param_alpha.cpu().numpy())
             all_params['obs'].append(param_obs.cpu().numpy())
             all_params['t'].append(param_t.cpu().numpy())
@@ -414,7 +423,12 @@ class BktModel(nn.Module):
         #
         # Problem representations
         #
-        self.problem_embd = nn.Linear(problem_dim, latent_dim)
+        self.problem_embd = nn.Sequential(
+            nn.Linear(problem_dim, latent_dim),
+            nn.Tanh(),
+            nn.Linear(latent_dim, latent_dim),
+        )
+        #self.problem_embd = nn.Linear(problem_dim, latent_dim)
         
         #
         # KC representations

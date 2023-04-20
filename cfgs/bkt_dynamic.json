@@ -4,7 +4,7 @@
     "patience" : 10,
     "tau" : 1.5,
     "n_latent_kcs" : 100,
-    "latent_dim" : 5,
+    "latent_dim" : 10,
     "reg" : 0,
     "n_batch_seqs" : 50,
     "n_test_batch_seqs" : 500,
