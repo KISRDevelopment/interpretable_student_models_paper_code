@@ -198,15 +198,14 @@ def train(train_seqs,
             batch_problem_seqs = pad_sequence([th.tensor([ problem_batch_idx[p] for p in s['problem']]) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             
-            print("# of problems in batch: %d" % len(problems_in_batch))
+            print("# of problems in batch (%d / %d): %d" % (offset, len(train_seqs), len(problems_in_batch)))
 
             rep_obs_seqs = []
             rep_actual_kc_seqs = []
             rep_mask_seqs = []
             rep_utilized_kcs = []
             for r in range(kwargs['n_train_samples']):
-                print("Sample %d" % r)
-
+                
                 #
                 # sample assignment
                 # Problems in batch x Latent KCs
@@ -233,7 +232,6 @@ def train(train_seqs,
             final_mask_seq = th.vstack(rep_mask_seqs).to(device)
             mask_ix = final_mask_seq.flatten()
 
-            print("Executing Forward Operation")
             output = model.forward(final_obs_seq, final_kc_seq, n_batch_trials)
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
@@ -248,12 +246,11 @@ def train(train_seqs,
         
         mean_train_loss = np.mean(losses)
 
-        print("Running validation")
         #
         # Validation
         #
         ytrue, ypred = predict(model, valid_seqs, problem_rep_mat, kwargs['n_test_batch_seqs'], device, kwargs['n_valid_samples'])
-        print("Done.")
+        
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         
         rand_index = 0
@@ -297,19 +294,20 @@ def train(train_seqs,
 def predict(model, seqs, problem_rep_mat, n_batch_seqs, device, n_samples):
     model.eval()
     seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
+    print("Running prediction")
     with th.no_grad():
 
         all_ypred = []
         for sample in range(n_samples):
             sample_ypred = []
             all_ytrue = []
-
+            
             #
             # draw sample assignment
             #
 
             A = model.sample_A(problem_rep_mat, 1e-6, True)
-            
+            print("Sample %d" % sample)
             for offset in range(0, len(seqs), n_batch_seqs):
                 end = offset + n_batch_seqs
                 batch_seqs = seqs[offset:end]
@@ -320,12 +318,8 @@ def predict(model, seqs, problem_rep_mat, n_batch_seqs, device, n_samples):
 
                 actual_kc = A[batch_problem_seqs]
 
-                print("Batch offset %d (len: %d)" % (offset, len(seqs)))
-                print(device)
-                print(batch_obs_seqs.shape)
-                print(actual_kc.shape)
                 output = model(batch_obs_seqs, actual_kc, n_batch_trials=500).cpu()
-                print("Done.")
+                
                 ypred = output[:, :, 1].flatten()
                 ytrue = batch_obs_seqs.flatten()
                 mask_ix = batch_mask_seqs.flatten()
