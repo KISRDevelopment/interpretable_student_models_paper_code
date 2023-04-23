@@ -2,18 +2,16 @@ import numpy as np
 import torch as th 
 import torch.nn.functional as F 
 import itertools
+import numpy.random as rng 
+from numba import jit
+import time 
+import torch_bkt 
 
+def sigmoid(x):
+    return 1/(1+np.exp(-x))
 def main():
 
     
-    # test sequence
-    seq = [0, 0, 0, 1, 1, 0, 1, 1, 1, 0]
-
-    # limit on time steps
-    N = 5
-
-    corr = th.tensor(seq).float()
-
     # BKT parameters probabilities
     logit_pI0 = 0.5
     logit_pG = -0.5
@@ -21,25 +19,62 @@ def main():
     logit_pL = -2
     logit_pF = -2 
 
-    model = FastBkt(N, 'cpu:0')
+    probs = sigmoid(np.array([logit_pL, logit_pF, logit_pG, logit_pS, logit_pI0]))
+    
+    # test sequence
+    seqs = generate_seqs(100, 500, probs)
+    
+    # limit on time steps
+    N = 10
 
-    logprob_correct = model.forward(corr[None,:], logit_pL, logit_pF, logit_pG, logit_pS, logit_pI0)
-    print("Test BKT:")
-    print(logprob_correct.exp().numpy())
+    corr = th.tensor(seqs).float()
+
+    model = FastBkt(N, 'cuda:0')
+
+
+    tic = time.perf_counter()
+    test_bkt_logprob_correct = model.forward(corr.to('cuda:0'), logit_pL, logit_pF, logit_pG, logit_pS, logit_pI0)
+    test_bkt_prob_corr = test_bkt_logprob_correct.exp().cpu().numpy()
+    toc = time.perf_counter()
+
+    test_bkt_time_sec = toc - tic 
+
+    #
+    # Baseline
+    # 
+    baseline_model = torch_bkt.BktModel(1)
+    tic = time.perf_counter()
+    output = baseline_model(corr.long().to('cuda:0'), th.zeros_like(corr).long().to('cuda:0'))
+    toc = time.perf_counter()
+
+    baseline_time_sec = toc - tic 
+
     #
     # Reference
     #
     import model_brute_force_bkt 
 
-    params = np.array([logit_pL, logit_pF, logit_pG, logit_pS, logit_pI0])
-    params = 1/(1+np.exp(-params))
+    tic = time.perf_counter()
+    ref_bkt_prob_corr = forward_bkt(seqs, *probs)
+    toc = time.perf_counter()
 
-    probs = forward_bkt(seq, *params)
-    print("Reference BKT:")
-    print(probs)
+    ref_bkt_time_sec = toc - tic 
 
+    print("All close? ", np.allclose(test_bkt_prob_corr, ref_bkt_prob_corr))
+    
+
+    print("Test BKT time(s): ", test_bkt_time_sec)
+    print("Baseline BKT time(s): ", baseline_time_sec)
+    print("Ref BKT time(s):", ref_bkt_time_sec)
+
+    print("Test BKT mean BCE: %8.4f" % bce_loss(seqs, test_bkt_prob_corr))
+    print("Ref BKT mean BCE: %8.4f" % bce_loss(seqs, ref_bkt_prob_corr))
+    
     #logliks = np.array(seq) * np.log(probs) + (1-np.array(seq)) * np.log(1-probs)
     #print(np.sum(logliks))
+
+def bce_loss(ytrue, prob):
+    return np.mean(ytrue * np.log(prob) + (1-ytrue)*np.log(1-prob))
 
 class FastBkt:
 
@@ -62,7 +97,8 @@ class FastBkt:
         self._trajectories = th.tensor(trajectories).float().to(device)
         self._trans_ind = th.tensor(trans_ind).long().to(device)
         self._pred_ind = th.tensor(pred_ind).long().to(device)
-        
+        self._device = device 
+
     def forward(self, corr, logit_pL, logit_pF, logit_pG, logit_pS, logit_pI0):
         """
             Input: 
@@ -80,7 +116,7 @@ class FastBkt:
                                   logit_pF, 
                                   -logit_pF, 
                                   -logit_pI0, 
-                                  logit_pI0])
+                                  logit_pI0]).to(self._device)
         trans_logprobs = F.logsigmoid(trans_logits)
 
         # probability of answering correctly (2**N, N)
@@ -198,25 +234,54 @@ def make_predictive_indices(trajectories):
     indices = trajectories[:,-1] * 2 + target_state
     return indices
 
-def forward_bkt(seq, pT, pF, pG, pS, pL0):
+@jit(nopython=True)
+def forward_bkt(seqs, pT, pF, pG, pS, pL0):
     """ computes the likelihood of a sequence, given BKT parameters """
-    probs = np.zeros(len(seq))
-    pL = pL0
-    npL = 0.0
-    for i in range(len(seq)):
-        
-        prob_correct = pL * (1.0-pS) + (1.0-pL) * pG
-        
-        if seq[i] == 1:
-            npL = (pL * (1.0 - pS)) / (pL * (1.0 - pS) + (1.0 - pL) * pG)
-        else:
-            npL = (pL * pS) / (pL * pS + (1.0 - pL) * (1.0 - pG))
-        pL = npL * (1-pF) + (1.0-npL) * pT
-        
-        probs[i] = prob_correct
+    probs = np.zeros_like(seqs)
     
-    probs = np.clip(probs, 0.01, 0.99)
+    for s in range(seqs.shape[0]):
+        pL = pL0
+        npL = 0.0
+        for i in range(seqs.shape[1]):
+            
+            prob_correct = pL * (1.0-pS) + (1.0-pL) * pG
+            
+            if seqs[s, i] == 1:
+                npL = (pL * (1.0 - pS)) / (pL * (1.0 - pS) + (1.0 - pL) * pG)
+            else:
+                npL = (pL * pS) / (pL * pS + (1.0 - pL) * (1.0 - pG))
+            pL = npL * (1-pF) + (1.0-npL) * pT
+            
+            probs[s, i] = prob_correct
+    
+    #probs = np.clip(probs, 0.01, 0.99)
     
     return probs
+
+def generate_seqs(n_students, n_trials, probs):
+    
+    skc = np.zeros((n_students, n_trials))
+
+    for s in range(n_students):
+        
+        state = rng.binomial(1, probs[4])
+        
+        pL = probs[0]
+        pF = probs[1]
+        pG = probs[2]
+        pS = probs[3]
+
+        for t in range(n_trials):
+            
+            pC = (1 - pS) * state + (1-state) * pG 
+            
+            ans = rng.binomial(1, pC)
+            
+            state = rng.binomial(1, (1 - pF) * state + (1-state) * pL)
+            
+            skc[s, t] = ans
+        
+    return skc 
+
 if __name__ == "__main__":
     main()
