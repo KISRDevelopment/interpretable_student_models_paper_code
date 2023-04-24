@@ -17,9 +17,12 @@ from collections import defaultdict
 import metrics 
 import copy 
 
+import time 
+
 def main():
     cfg_path = sys.argv[1]
     dataset_name = sys.argv[2]
+    output_path = sys.argv[3]
 
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
@@ -30,12 +33,15 @@ def main():
     cfg['n_kcs'] = np.max(df['skill']) + 1
     cfg['device'] = 'cuda:0'
 
-    run(cfg, df, splits) 
+    results_df = run(cfg, df, splits) 
     
+    results_df.to_csv(output_path)
+
 def run(cfg, df, splits):
 
     seqs = to_student_sequences(df)
     
+    results = []
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -53,9 +59,34 @@ def run(cfg, df, splits):
 
         train_seqs = [seqs[s] for s in train_students]
         valid_seqs = [seqs[s] for s in valid_students]
-        test_seqs = [seqs[s] for s in test_students]
+        
+        test_seqs = split_seqs_by_kc([seqs[s] for s in test_students])
+        test_seqs = sorted(test_seqs, reverse=True, key=lambda s: len(s[1]))
+        
+        # Train & Test
+        tic = time.perf_counter()
+        model = train(cfg, train_seqs, valid_seqs)
+        ytrue, log_ypred_correct = predict(cfg, model, test_seqs)
+        toc = time.perf_counter()
 
-        train(cfg, train_seqs, valid_seqs)
+        ypred_correct = np.exp(log_ypred_correct)
+
+        # with th.no_grad():
+        #     param_alpha, param_obs, param_t = model.get_params()
+        #     all_params['alpha'].append(param_alpha.cpu().numpy())
+        #     all_params['obs'].append(param_obs.cpu().numpy())
+        #     all_params['t'].append(param_t.cpu().numpy())
+
+        run_result = metrics.calculate_metrics(ytrue, ypred_correct)
+        run_result['time_diff_sec'] = toc - tic 
+
+        results.append(run_result)
+        print(run_result)
+        
+    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
+    print(results_df)
+    
+    return results_df
 
 def train(cfg, train_seqs, valid_seqs):
     
