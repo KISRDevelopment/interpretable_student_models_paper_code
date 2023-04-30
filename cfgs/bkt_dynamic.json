@@ -11,7 +11,7 @@
     "n_test_batch_seqs" : 200,
     "hard_samples" : false,
     "ref_labels" : null,
-    "n_valid_samples" : 50,
+    "n_valid_samples" : 5,
     "n_test_samples" : 50,
     "n_train_samples" : 10
 }

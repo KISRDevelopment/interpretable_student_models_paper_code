@@ -97,8 +97,8 @@ def run(cfg, df, splits, problem_rep_mat):
         
         split_rep_mat = problem_rep_mat
         if problem_rep_mat is None:
-            #split_rep_mat = position_encode_problems.encode_problem_pos_distribs(train_df, n_problems)
-            split_rep_mat = position_encode_problems.encode_problem_ids(train_df, n_problems)
+            split_rep_mat = position_encode_problems.encode_problem_pos_distribs(train_df, n_problems)
+            #split_rep_mat = position_encode_problems.encode_problem_ids(train_df, n_problems)
             
             split_rep_mat = th.tensor(split_rep_mat).float().to('cuda:0')
         else:

@@ -11,7 +11,7 @@
     "ref_labels" : null,
     "use_problems" : true,
     "n_initial_kcs" : 5,
-    "n_valid_samples" : 50,
+    "n_valid_samples" : 10,
     "n_test_samples" : 50,
     "n_train_samples" : 1
 }
