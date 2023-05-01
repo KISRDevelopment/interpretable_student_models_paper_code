@@ -9,7 +9,9 @@ from torch.nn.utils.rnn import pad_sequence
 import metrics 
 import copy 
 import sklearn.metrics
-def main(cfg_path, dataset_name, output_path):
+import position_encode_problems
+
+def main(cfg_path, dataset_name, output_path, problem_rep_path):
     
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
@@ -21,15 +23,20 @@ def main(cfg_path, dataset_name, output_path):
     n_problems = np.max(df['problem']) + 1
     A = np.array([problems_to_skills[p] for p in range(n_problems)])
     cfg['ref_labels'] = A
+    
+    if problem_rep_path is None:
+        problem_rep_mat = None
+    else:
+        problem_rep_mat = np.load(problem_rep_path)
 
-    results_df, all_embdeddings = evaluate(cfg, df, splits)
+    results_df, all_embdeddings = evaluate(cfg, df, splits, problem_rep_mat)
     
     results_df.to_csv(output_path)
 
     embd_output_path = output_path.replace(".csv", ".embeddings.npy")
     np.save(embd_output_path, all_embdeddings)
 
-def evaluate(cfg, df, splits, device='cuda:0'):
+def evaluate(cfg, df, splits, problem_rep_mat, device='cuda:0'):
     n_problems = np.max(df['problem']) + 1
     seqs = to_student_sequences(df)
     
@@ -38,6 +45,9 @@ def evaluate(cfg, df, splits, device='cuda:0'):
 
     results = []
     all_params = defaultdict(list)
+
+    if problem_rep_mat is not None:
+        problem_rep_mat = th.tensor(problem_rep_mat).float().to(device)
 
     all_embdeddings = []
     for s in range(splits.shape[0]):
@@ -62,22 +72,29 @@ def evaluate(cfg, df, splits, device='cuda:0'):
         n_valid_batch_seqs = cfg['n_test_batch_seqs']
         print("Train batch size: %d, valid: %d" % (n_train_batch_seqs, n_valid_batch_seqs))
 
-        
+        split_rep_mat = problem_rep_mat
+        if problem_rep_mat is None:
+            split_rep_mat = position_encode_problems.encode_problem_pos_distribs(train_df, n_problems)
+            split_rep_mat = th.tensor(split_rep_mat).float().to('cuda:0')
+        else:
+            if len(split_rep_mat.shape) > 2:
+                split_rep_mat = problem_rep_mat[s,:,:]
         model = train(train_seqs, 
             valid_seqs, 
             n_problems,
+            split_rep_mat,
             cfg,
             device)
 
         n_test_batch_seqs = cfg['n_test_batch_seqs']
         print("Test batch size: %d" % n_test_batch_seqs)
 
-        ytrue_test, ypred_test = predict(model, test_seqs, n_test_batch_seqs, cfg['n_batch_trials'], cfg['n_samples'], device)
+        ytrue_test, ypred_test = predict(model, test_seqs, split_rep_mat, n_test_batch_seqs, cfg['n_batch_trials'], cfg['n_samples'], device)
         
         with th.no_grad():
             state_dict = model.state_dict()
-            problem_embddings = state_dict['problem_embd.weight'].cpu()
-            all_embdeddings.append(problem_embddings.numpy())
+            problem_embddings = model.problem_embd(split_rep_mat)
+            all_embdeddings.append(problem_embddings.cpu().numpy())
             
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         
@@ -93,9 +110,10 @@ def evaluate(cfg, df, splits, device='cuda:0'):
     all_embdeddings = np.array(all_embdeddings)
     return results_df, all_embdeddings
 
-def train(train_seqs, valid_seqs, n_problems, cfg, device):
+def train(train_seqs, valid_seqs, n_problems, problem_rep_mat, cfg, device):
+    problem_dim = problem_rep_mat.shape[1]
 
-    model = ExpMovAvgModel(n_problems, cfg['n_latent_kcs'], cfg['n_hidden'])
+    model = ExpMovAvgModel(problem_dim, cfg['n_latent_kcs'], cfg['n_hidden'])
     model = model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
@@ -119,18 +137,27 @@ def train(train_seqs, valid_seqs, n_problems, cfg, device):
             mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             mask_seqs = mask_seqs.to(device)
 
-            pC = th.zeros((len(batch_seqs), obs_seqs.shape[1])).to(device)
+            all_pCs = []
+            for s in range(10):
+                pC = th.zeros((len(batch_seqs), obs_seqs.shape[1])).to(device)
 
-            A = model.sample_A(cfg['tau'], False)
+                A = model.sample_A(problem_rep_mat, cfg['tau'], False)
+                
+                for i in range(0, obs_seqs.shape[1], cfg['n_batch_trials']):
+                    to_trial = i + cfg['n_batch_trials']
+                    batch_obs_seqs = obs_seqs[:, i:to_trial]
+                    batch_problem_seqs = problem_seqs[:, i:to_trial]
+                    pC[:, i:to_trial] = model(batch_obs_seqs, batch_problem_seqs, A)
+                
+                all_pCs.append(pC)
             
-            for i in range(0, obs_seqs.shape[1], cfg['n_batch_trials']):
-                to_trial = i + cfg['n_batch_trials']
-                batch_obs_seqs = obs_seqs[:, i:to_trial]
-                batch_problem_seqs = problem_seqs[:, i:to_trial]
-                pC[:, i:to_trial] = model(batch_obs_seqs, batch_problem_seqs, A)
-            
+            pC = th.vstack(all_pCs)
+
             logpC = th.log(pC)
             logpnC = th.log(1 - pC)
+
+            obs_seqs = th.tile(obs_seqs, (10, 1))
+            mask_seqs = th.tile(mask_seqs, (10, 1))
 
             train_loss = -(obs_seqs * logpC + (1-obs_seqs) * logpnC).flatten()
             mask_ix = mask_seqs.flatten()
@@ -148,7 +175,7 @@ def train(train_seqs, valid_seqs, n_problems, cfg, device):
         #
         # Validation
         #
-        ytrue, ypred = predict(model, valid_seqs, n_valid_seqs, cfg['n_batch_trials'], cfg['n_samples'], device)
+        ytrue, ypred = predict(model, valid_seqs, problem_rep_mat, n_valid_seqs, cfg['n_batch_trials'], cfg['n_samples'], device)
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
 
@@ -162,7 +189,7 @@ def train(train_seqs, valid_seqs, n_problems, cfg, device):
             indecies = []
             n_utilized_kcs = []
             for s in range(cfg['n_samples']):
-                A = model.sample_A(1e-6, True)
+                A = model.sample_A(problem_rep_mat, 1e-6, True)
                 n_utilized_kcs.append((A.sum(0) > 0).sum().cpu().numpy())
                 if ref_labels is not None:
                     pred_labels = th.argmax(A, dim=1).cpu().numpy()
@@ -204,7 +231,7 @@ def to_student_sequences(df):
         seqs[r.student]["problem"].append(r.problem)
     return seqs
 
-def predict(model, seqs, n_batch_seqs, n_batch_trials, n_samples, device):
+def predict(model, seqs, problem_rep_mat, n_batch_seqs, n_batch_trials, n_samples, device):
     model.eval()
     seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
     with th.no_grad():
@@ -213,7 +240,7 @@ def predict(model, seqs, n_batch_seqs, n_batch_trials, n_samples, device):
             sample_ypred = []
             all_ytrue = []
 
-            A = model.sample_A(1e-6, True)
+            A = model.sample_A(problem_rep_mat, 1e-6, True)
             
             for offset in range(0, len(seqs), n_batch_seqs):
                 end = offset + n_batch_seqs
@@ -251,20 +278,27 @@ def predict(model, seqs, n_batch_seqs, n_batch_trials, n_samples, device):
     return ytrue, ypred
 
 class ExpMovAvgModel(nn.Module):
-    def __init__(self, n_problems, n_latent_kcs, n_hidden):
+    def __init__(self, problem_dim, n_latent_kcs, n_hidden):
         super(ExpMovAvgModel, self).__init__()
         
-        self.n_problems = n_problems 
         self.n_latent_kcs = n_latent_kcs
 
-        self.problem_embd = nn.Embedding(n_problems, n_hidden)
+        self.loglam = nn.Parameter(th.tensor(0.0).cuda())
+        
+        self.problem_embd = nn.Sequential(
+            nn.Linear(problem_dim, n_hidden),
+            nn.Tanh(),
+            nn.Linear(n_hidden, n_hidden),
+        )
+
         self.kc_embd = nn.Embedding(n_latent_kcs, n_hidden)
         self.kc_guess = nn.Linear(n_hidden, 1)
         self.kc_slip = nn.Linear(n_hidden, 1)
         self.kc_lam = nn.Linear(n_hidden, 1)
         self.R = nn.Parameter(th.randn(n_hidden, n_hidden))
-        self._hard = False
-    def sample_A(self, tau, hard_samples):
+        self.kcs_range = th.arange(self.n_latent_kcs).cuda() / self.n_latent_kcs
+        
+    def sample_A(self, problem_reps, tau, hard_samples):
         """
            
             tau: Gumbel-softmax temperature
@@ -272,20 +306,25 @@ class ExpMovAvgModel(nn.Module):
             Output:
                 Assignment matrix P x Latent KCs
         """
-        membership_logits = self._compute_membership_logits()
+        membership_logits = self._compute_membership_logits(problem_reps)
 
         # sample
         A = nn.functional.gumbel_softmax(membership_logits, hard=hard_samples, tau=tau, dim=1)
-        self._hard = hard_samples
+        
         return A 
     
-    def _compute_membership_logits(self):
+    def _compute_membership_logits(self, problem_reps):
 
-        problem_embeddings = self.problem_embd.weight # Pxn_hidden
+        problem_embeddings = self.problem_embd(problem_reps)
         
         # compute logits
         membership_logits = (problem_embeddings @ self.R) @ self.kc_embd.weight.T  # Problems x Latent KCs
         
+        # reduce number of available KCs according to lambda
+        # lam = self.loglam.exp()
+        # decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
+        # membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
+
         return membership_logits
 
     def forward(self, y, problem_seq, A):
@@ -338,5 +377,8 @@ if __name__ == "__main__":
     cfg_path = sys.argv[1]
     dataset_name = sys.argv[2]
     output_path = sys.argv[3]
-
-    main(cfg_path, dataset_name, output_path)
+    problem_rep_path = None
+    if len(sys.argv) > 4:
+        problem_rep_path = sys.argv[4]
+    
+    main(cfg_path, dataset_name, output_path, problem_rep_path)
