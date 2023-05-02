@@ -20,8 +20,8 @@ def main():
     #
     # train
     #
-    model = EmaFiltering(cfg['n_hidden'])
-    #model = EmaFilteringLinear()
+    model = EmaFilteringMultiplexor()
+    
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
     n_batch_size = int(cfg['p_batch_size'] * X.shape[0])
 
@@ -56,15 +56,12 @@ def main():
 def generate_synth_data(n_probs, n_prev_hs):
 
     probs = np.linspace(0.01, 0.99, n_probs)
-    prev_hs = np.linspace(0, 1, n_prev_hs)
+    prev_hs = np.linspace(0.01, 0.99, n_prev_hs)
     prev_ys = [0, 1]
 
     combs = np.array(list(itertools.product(
         prev_hs, prev_ys, probs, probs, probs, probs)))
     
-    # combs = np.array(list(itertools.product(
-    #     prev_hs, prev_ys, [0.05], [0.05], [0.3], [0.5])))
-
     next_h = bkt_filtering(combs[:, 0], 
         combs[:, 1], 
         combs[:, 2],
@@ -84,10 +81,29 @@ def bkt_filtering(prev_h, prev_y, pL, pF, pG, pS):
     
     return unnormed_1 / (unnormed_0 + unnormed_1)
  
-class EmaFiltering(nn.Module):
+class EmaFilteringMultiplexor(nn.Module):
 
-    def __init__(self, n_hidden):
-        super(EmaFiltering, self).__init__()
+    def __init__(self):
+        super(EmaFilteringMultiplexor, self).__init__()
+
+        self.linear = EmaFilteringLinear()
+        self.logit = EmaFilteringLogit()
+
+        self.logit_weight_linear = nn.Linear(4, 1)
+     
+    def forward(self, prev_h, prev_y, bkt_params):
+        
+        weight = th.sigmoid( self.logit_weight_linear(bkt_params) ) # Bx1
+
+        linear_output = self.linear(prev_h, prev_y, bkt_params)
+        logit_output = th.sigmoid(self.logit(prev_h, prev_y, bkt_params))
+
+        return weight * linear_output + (1-weight) * logit_output
+
+class EmaFilteringLinear(nn.Module):
+
+    def __init__(self):
+        super(EmaFilteringLinear, self).__init__()
         
 
         self._logit_y1_anchors = nn.Linear(4, 2)
@@ -101,11 +117,11 @@ class EmaFiltering(nn.Module):
             bkt_params: Bx4
         """
         
-        logit_y1_anchors = self._logit_y1_anchors(bkt_params)
-        y1_anchors = th.sigmoid(logit_y1_anchors)
+        y1_anchors = self._logit_y1_anchors(bkt_params)
+        y1_anchors = th.sigmoid(y1_anchors)
 
-        logit_y0_anchors = self._logit_y0_anchors(bkt_params)
-        y0_anchors = th.sigmoid(logit_y0_anchors)
+        y0_anchors = self._logit_y0_anchors(bkt_params)
+        y0_anchors = th.sigmoid(y0_anchors)
 
         # Bx1
         return self.forward_(prev_h, prev_y, y1_anchors, y0_anchors)
@@ -119,18 +135,17 @@ class EmaFiltering(nn.Module):
         # Bx1
         return prev_y * (y1_offset + (y1_final - y1_offset) * prev_h) \
             +  (1-prev_y) * (y0_offset + (y0_final - y0_offset) * prev_h)
-class EmaFilteringLinear(nn.Module):
+
+class EmaFilteringLogit(nn.Module):
 
     def __init__(self):
-        super(EmaFilteringLinear, self).__init__()
+        super(EmaFilteringLogit, self).__init__()
         
-        n_coeff = 19
 
-        self._layer_ih = nn.Linear(6, 10)
-        self._layer_ho = nn.Linear(10, 1)
+        self._logit_y1_anchors = nn.Linear(4, 2)
+        self._logit_y0_anchors = nn.Linear(4, 2)
 
-        self._layer_io = nn.Linear(n_coeff, 1)
-
+    
     def forward(self, prev_h, prev_y, bkt_params):
         """
             prev_h: Bx1
@@ -138,21 +153,24 @@ class EmaFilteringLinear(nn.Module):
             bkt_params: Bx4
         """
         
-        # X = th.hstack((prev_y, 
-        #     prev_h, 
-        #     bkt_params,
-        #     prev_y*prev_h, 
-        #     prev_y*bkt_params, 
-        #     prev_h*bkt_params, 
-        #     prev_y*prev_h*bkt_params))
+        y1_anchors = self._logit_y1_anchors(bkt_params)
         
-        #h = self._layer_io(X)
+        y0_anchors = self._logit_y0_anchors(bkt_params)
+        
+        # Bx1
+        return self.forward_(prev_h, prev_y, y1_anchors, y0_anchors)
 
-        X = th.hstack((prev_y, prev_h, bkt_params))
-        h = self._layer_ih(X)
-        h = self._layer_ho(th.tanh(h))
-        
-        return th.sigmoid(h)
-        
+    def forward_(self, prev_h, prev_y, y1_anchors, y0_anchors):
+        y1_offset = y1_anchors[:, [0]]
+        y1_final = y1_anchors[:, [1]]
+        y0_offset = y0_anchors[:, [0]]
+        y0_final = y0_anchors[:, [1]]
+
+        prev_h_logit = th.log(prev_h / (1-prev_h))
+
+        # Bx1
+        return prev_y * (y1_offset + y1_final * prev_h_logit) \
+            +  (1-prev_y) * (y0_offset + y0_final * prev_h_logit)
+
 if __name__ == "__main__":
     main()
