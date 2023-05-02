@@ -99,7 +99,6 @@ def run(cfg, df, splits, problem_rep_mat):
         if problem_rep_mat is None:
             split_rep_mat = position_encode_problems.encode_problem_pos_distribs(train_df, n_problems)
             #split_rep_mat = position_encode_problems.encode_problem_ids(train_df, n_problems)
-            
             split_rep_mat = th.tensor(split_rep_mat).float().to('cuda:0')
         else:
             if len(split_rep_mat.shape) > 2:
@@ -198,7 +197,7 @@ def train(train_seqs,
             batch_problem_seqs = pad_sequence([th.tensor([ problem_batch_idx[p] for p in s['problem']]) for s in batch_seqs], batch_first=True, padding_value=0)
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
             
-            print("# of problems in batch (%d / %d): %d" % (offset, len(train_seqs), len(problems_in_batch)))
+            #print("# of problems in batch (%d / %d): %d" % (offset, len(train_seqs), len(problems_in_batch)))
 
             rep_obs_seqs = []
             rep_actual_kc_seqs = []
@@ -294,7 +293,7 @@ def train(train_seqs,
 def predict(model, seqs, problem_rep_mat, n_batch_seqs, device, n_samples):
     model.eval()
     seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
-    print("Running prediction")
+    #print("Running prediction")
     with th.no_grad():
 
         all_ypred = []
@@ -307,7 +306,7 @@ def predict(model, seqs, problem_rep_mat, n_batch_seqs, device, n_samples):
             #
 
             A = model.sample_A(problem_rep_mat, 1e-6, True)
-            print("Sample %d" % sample)
+            #print("Sample %d" % sample)
             for offset in range(0, len(seqs), n_batch_seqs):
                 end = offset + n_batch_seqs
                 batch_seqs = seqs[offset:end]
@@ -436,7 +435,7 @@ class BktModel(nn.Module):
         membership_logits = (problem_embeddings @ self.R) @ self.kc_embd.weight.T  # Problems x Latent KCs
         
         # reduce number of available KCs according to lambda
-        lam = self.loglam.exp()
+        #lam = self.loglam.exp()
         #decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
         #membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
 
