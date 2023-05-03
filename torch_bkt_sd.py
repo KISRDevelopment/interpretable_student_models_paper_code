@@ -435,9 +435,9 @@ class BktModel(nn.Module):
         membership_logits = (problem_embeddings @ self.R) @ self.kc_embd.weight.T  # Problems x Latent KCs
         
         # reduce number of available KCs according to lambda
-        #lam = self.loglam.exp()
-        #decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
-        #membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
+        lam = self.loglam.exp()
+        decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
+        membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
 
         return membership_logits
 

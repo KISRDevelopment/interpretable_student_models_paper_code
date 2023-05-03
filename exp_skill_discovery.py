@@ -9,8 +9,8 @@ import glob
 def main():
     
     ns_skills = [1, 5, 25, 50]
-    kcseq = 'blocked'
-    results_dir = './data/results-sd_%s' % kcseq
+    kcseq = 'interleaved'
+    results_dir = './data/results-sd-with-lam-_%s' % kcseq
 
     os.makedirs(results_dir, exist_ok=True)
 
@@ -45,7 +45,7 @@ def main():
                 cfg_path,
                 dataset_file,
                 output_path])
-                
+
         #
         # BKT model that just uses problem IDs as skills
         #
