@@ -1,0 +1,8 @@
+{
+    "n_skills" : 7,
+    "lr" : 0.1,
+    "epochs" : 100,
+    "patience" : 10,
+    "n_batch_seqs" : 50,
+    "n_test_batch_seqs" : 50
+}

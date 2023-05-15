@@ -55,7 +55,10 @@ def main():
     print(result.exp())
     print(state.exp())
 
-
+    model = CsbktModel({ 'n_skills' : n_skills, 'n_problems' : n_problems })
+    log_prob, log_alpha = model(obs, problem_seq)
+    print(log_prob.exp())
+    print(log_alpha.exp())
 def make_state_decoder_matrix(k):
     """
         creates a lookup table that maps integer states into
@@ -151,6 +154,68 @@ def make_transition_log_prob_matrix(im, logit_pL, logit_pF):
     # finally, compute summation to get the log transition matrix
     return U.sum(2) # [n_total, n_total]
 
+class CsbktModel(nn.Module):
+    def __init__(self, cfg):
+        """
+            n_skills: # of latent skills (max around 10-12)
+            n_problems: # of problems
+        """
+        super(CsbktModel, self).__init__()
+        
+        self.decoder = make_state_decoder_matrix(cfg['n_skills']).to(cfg['device'])
+        
+        self.tim = make_transition_indicator_matrix(self.decoder).to(cfg['device'])
+        
+        n_states = self.decoder.shape[0]
+
+        #
+        # generates output predictions given state
+        #
+        self.pred_layer = NIDOLayer(cfg['n_problems'], self.decoder)
+        
+        # 
+        # BKT HMM
+        #
+        self.hmm = HmmCell(n_states, 2)
+        
+        #
+        # KC parameters
+        #
+        self.kc_logit_pL = nn.Parameter(th.randn(cfg['n_skills']))
+        self.kc_logit_pF = nn.Parameter(th.randn(cfg['n_skills']))
+        self.kc_logit_pi = nn.Parameter(th.randn(cfg['n_skills']))
+
+        self.cfg = cfg 
+
+    def forward(self, corr, problem_seq):
+        # [n_states, 1]
+        initial_log_prob_vec = make_initial_log_prob_vector(self.decoder, self.kc_logit_pi[:,None])
+
+        # [n_batch, n_states]
+        initial_log_prob_vec = th.tile(initial_log_prob_vec.T, (corr.shape[0], 1)) 
+
+        # [n_batch, t, 2]
+        return self.forward_given_alpha(corr, problem_seq, initial_log_prob_vec)
+        
+
+    def forward_given_alpha(self, corr, problem_seq, initial_log_prob_vec):
+        # [n_batch, t, n_states, 2]
+        obs_log_probs = self.pred_layer(problem_seq)
+
+        # [n_states, n_states] (Target x Source)
+        trans_log_probs = make_transition_log_prob_matrix(self.tim, self.kc_logit_pL[:,None], self.kc_logit_pF[:,None])
+        
+        # [n_states, 1]
+        initial_log_prob_vec = make_initial_log_prob_vector(self.decoder, self.kc_logit_pi[:,None])
+        
+        # [n_batch, n_states]
+        initial_log_prob_vec = th.tile(initial_log_prob_vec.T, (corr.shape[0], 1)) 
+
+        # [n_batch, t, 2]
+        result, log_alpha  = self.hmm(corr, trans_log_probs, obs_log_probs, initial_log_prob_vec)
+        
+        return result, log_alpha
+
 class HmmCell(th.jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs):
@@ -199,7 +264,7 @@ class HmmCell(th.jit.ScriptModule):
         
         return outputs, log_alpha
 
-class NIDOLayer(nn.Module):
+class NIDOLayer(th.jit.ScriptModule):
 
     def __init__(self, n_problems, decoder):
         super().__init__()
@@ -212,6 +277,7 @@ class NIDOLayer(nn.Module):
         
         self.decoder = decoder # [n_states, n_skills]
 
+    @th.jit.script_method
     def forward(self, problem_seq):
         """
             Input:
