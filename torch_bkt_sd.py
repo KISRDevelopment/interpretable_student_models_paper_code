@@ -15,6 +15,8 @@ import time
 import sklearn.metrics
 from scipy.stats import qmc
 import position_encode_problems 
+import nnkmeans 
+import sklearn.cluster
 
 def main():
     import sys
@@ -122,11 +124,12 @@ def run(cfg, df, splits, problem_rep_mat):
         ypred_test = np.exp(log_ypred_test)
 
         with th.no_grad():
-            param_alpha, param_obs, param_t, Aprior = model.get_params(split_rep_mat)
-            all_params['alpha'].append(param_alpha.cpu().numpy())
-            all_params['obs'].append(param_obs.cpu().numpy())
-            all_params['t'].append(param_t.cpu().numpy())
-            all_params['Aprior'].append(Aprior.cpu().numpy())
+            pass
+            # param_alpha, param_obs, param_t, Aprior = model.get_params(split_rep_mat)
+            # all_params['alpha'].append(param_alpha.cpu().numpy())
+            # all_params['obs'].append(param_obs.cpu().numpy())
+            # all_params['t'].append(param_t.cpu().numpy())
+            # all_params['Aprior'].append(Aprior.cpu().numpy())
         
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         run_result['time_diff_sec'] = toc - tic 
@@ -171,7 +174,8 @@ def train(train_seqs,
     
     problem_dim = problem_rep_mat.shape[1]
 
-    model = BktModel(n_latent_kcs, latent_dim, problem_dim)
+    model = BktModel(problem_dim, latent_dim, n_latent_kcs, kwargs['kmeans_epsilon'], 
+        kwargs['kmeans_max_iter'], kwargs['kmeans_tau'], device)
     model = model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
@@ -203,26 +207,31 @@ def train(train_seqs,
             rep_actual_kc_seqs = []
             rep_mask_seqs = []
             rep_utilized_kcs = []
+
+            membership_logits = model.compute_membership_logits(problem_rep_mat[problems_in_batch, :])
+
             for r in range(kwargs['n_train_samples']):
                 
                 #
                 # sample assignment
                 # Problems in batch x Latent KCs
                 #
-                A = model.sample_A(problem_rep_mat[problems_in_batch, :], tau, kwargs['hard_samples'])
+                A = model.sample_A(membership_logits, tau, kwargs['hard_samples'])
                 
                 # 
                 # translate problem to KC
                 #
                 actual_kc = A[batch_problem_seqs] # B X T X Latent KCs
 
+                kc_reps = A.T @ problem_rep_mat[problems_in_batch, :] # Latent KC x d
+                
                 #
                 # add to list
                 #
                 rep_obs_seqs.append(batch_obs_seqs)
                 rep_actual_kc_seqs.append(actual_kc)
                 rep_mask_seqs.append(batch_mask_seqs)
-            
+                
             #
             # construct final inputs to model
             #
@@ -231,11 +240,11 @@ def train(train_seqs,
             final_mask_seq = th.vstack(rep_mask_seqs).to(device)
             mask_ix = final_mask_seq.flatten()
 
-            output = model.forward(final_obs_seq, final_kc_seq, n_batch_trials)
+            output = model.forward(final_obs_seq, final_kc_seq, kc_reps, n_batch_trials)
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
             
-            train_loss = train_loss[mask_ix].mean() + kwargs['reg'] * model.loglam.exp()
+            train_loss = train_loss[mask_ix].mean() 
 
             optimizer.zero_grad()
             train_loss.backward()
@@ -258,19 +267,27 @@ def train(train_seqs,
             ref_labels = kwargs['ref_labels']
             indecies = []
             n_utilized_kcs = []
+            membership_logits = model.compute_membership_logits(problem_rep_mat)
+            #pred_labels_argmax = th.argmax(membership_logits, dim=1)
+            # rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
+            # n_utilized_kcs = 0
+
             for s in range(100):
-                A = model.sample_A(problem_rep_mat, 1e-6, True)
+                A = model.sample_A(membership_logits, 1, True)
                 n_utilized_kcs.append((A.sum(0) > 0).sum().cpu().numpy())
                 if ref_labels is not None:
                     pred_labels = th.argmax(A, dim=1).cpu().numpy()
+                    
                     rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
                     indecies.append(rand_index)
             if ref_labels is not None:
                 rand_index = np.mean(indecies)
             n_utilized_kcs = np.mean(n_utilized_kcs)
 
-        r = stopping_rule(auc_roc)
 
+            print(model.kc_discovery.softmax_log_tau.exp())
+        r = stopping_rule(auc_roc)
+        
         print("%4d Train loss: %8.4f, Valid AUC: %0.2f (Rand: %0.2f, Utilized KCS: %d) %s" % (e, mean_train_loss, auc_roc, 
             rand_index,
             n_utilized_kcs,
@@ -304,8 +321,10 @@ def predict(model, seqs, problem_rep_mat, n_batch_seqs, device, n_samples):
             #
             # draw sample assignment
             #
-
-            A = model.sample_A(problem_rep_mat, 1e-6, True)
+            membership_logits = model.compute_membership_logits(problem_rep_mat)
+            A = model.sample_A(membership_logits, 1e-6, True)
+            kc_reps = A.T @ problem_rep_mat # Latent KC x d
+            
             #print("Sample %d" % sample)
             for offset in range(0, len(seqs), n_batch_seqs):
                 end = offset + n_batch_seqs
@@ -317,7 +336,7 @@ def predict(model, seqs, problem_rep_mat, n_batch_seqs, device, n_samples):
 
                 actual_kc = A[batch_problem_seqs]
 
-                output = model(batch_obs_seqs, actual_kc, n_batch_trials=500).cpu()
+                output = model(batch_obs_seqs, actual_kc, kc_reps, n_batch_trials=500).cpu()
                 
                 ypred = output[:, :, 1].flatten()
                 ytrue = batch_obs_seqs.flatten()
@@ -371,36 +390,57 @@ def create_early_stopping_rule(patience, min_perc_improvement):
 
     return stop
 
+class KCDiscovery(nn.Module):
+
+    def __init__(self, problem_dim, n_latent_kcs, kmeans_epsilon, kmeans_max_iter, kmeans_tau, device):
+        super().__init__()
+        
+        self.n_latent_kcs = n_latent_kcs
+        self.device = device
+        self.kmeans = nnkmeans.NNKmeans(kmeans_epsilon, kmeans_max_iter)
+        self.kmeans_log_tau = nn.Parameter(th.randn(1))
+        self.softmax_log_tau = th.tensor(np.log(0.243)).float()
+        self._centroids = None 
+
+    def compute_membership_logits(self, problem_reps):
+        if self._centroids is None:
+            with th.no_grad():
+                problem_reps_np = problem_reps.cpu().numpy()
+                centroids,_ = sklearn.cluster.kmeans_plusplus(problem_reps_np, n_clusters=self.n_latent_kcs)
+                self._centroids = th.tensor(centroids).float().to(self.device)
+        
+        logits, self._centroids = self.kmeans(problem_reps, self._centroids.detach(), self.kmeans_log_tau.exp()) # P x K
+        
+        return logits 
+    
+    def sample_A(self, membership_logits, tau, hard):
+        return nn.functional.gumbel_softmax(membership_logits / self.softmax_log_tau.exp(), hard=hard, tau=tau, dim=1)
+    
 class BktModel(nn.Module):
-    def __init__(self, n_latent_kcs, latent_dim, problem_dim, **kwargs):
+    def __init__(self, problem_dim, latent_dim, n_latent_kcs, kmeans_epsilon, kmeans_max_iter, kmeans_tau, device):
         super(BktModel, self).__init__()
         
         #
         # Problem representations
         #
-        self.problem_embd = nn.Sequential(
-            nn.Linear(problem_dim, latent_dim),
-            nn.Tanh(),
-            nn.Linear(latent_dim, latent_dim),
-        )
-        #self.problem_embd = nn.Linear(problem_dim, latent_dim)
+        # self.problem_embd = nn.Sequential(
+        #     nn.Linear(problem_dim, latent_dim),
+        #     nn.Tanh(),
+        #     nn.Linear(latent_dim, latent_dim)
+        # )
         
         #
-        # KC representations
-        #
-        self.kc_embd = nn.Embedding(n_latent_kcs, latent_dim)
+        # KC Discovery
+        self.kc_discovery = KCDiscovery(problem_dim, n_latent_kcs, kmeans_epsilon, kmeans_max_iter, kmeans_tau, device)
         
         #
         # Projects KC representation into BKT probabilities
         # pL, pF, pG, pS, pI0
         #
-        self.kc_logits_f = nn.Linear(latent_dim, 5)
-
-        #
-        # controls the number of available KCs
-        #
-        self.loglam = nn.Parameter(th.randn(1).cuda())
-        self.R = nn.Parameter(th.randn(latent_dim, latent_dim))
+        self.kc_logits_f = nn.Sequential(
+            nn.Linear(problem_dim, 5),
+            nn.Tanh(),
+            nn.Linear(5, 5))
 
         #
         # BKT Module
@@ -409,67 +449,49 @@ class BktModel(nn.Module):
         
         self.problem_dim = problem_dim
         self.n_latent_kcs = n_latent_kcs
-        self.kcs_range = th.arange(self.n_latent_kcs).cuda() / self.n_latent_kcs
         
-
-    def sample_A(self, problem_reps, tau, hard_samples):
+    def compute_membership_logits(self, problem_reps):
+        return self.kc_discovery.compute_membership_logits(problem_reps)
+    
+    def sample_A(self, membership_logits, tau, hard_samples):
         """
-            problem_reps: P x problem_dim where P is # of problems
-                (None if problem_features is False)
+            membership_logits: P x F where P is # of problems
             tau: Gumbel-softmax temperature
             hard_samples: return hard samples or not
             Output:
                 Assignment matrix P x Latent KCs
         """
-        membership_logits = self._compute_membership_logits(problem_reps)
-
-        # sample
-        A = nn.functional.gumbel_softmax(membership_logits, hard=hard_samples, tau=tau, dim=1)
-        return A 
+        return self.kc_discovery.sample_A(membership_logits, tau, hard_samples)
     
-    def _compute_membership_logits(self, problem_reps):
-
-        problem_embeddings = self.problem_embd(problem_reps)
+    def forward(self, corr, actual_kc, kc_reps, n_batch_trials):
+        """
+            kc_reps: BxN_latent_KCxd
+        """
+        trans_logits, obs_logits, init_logits = self._get_kc_params(kc_reps)
+        logits, log_alpha = self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
+        return logits 
         
-        # compute logits
-        membership_logits = (problem_embeddings @ self.R) @ self.kc_embd.weight.T  # Problems x Latent KCs
-        
-        # reduce number of available KCs according to lambda
-        lam = self.loglam.exp()
-        decay_mat = th.exp(-self.kcs_range / lam)[None,:].cuda() # 1 x Latent KCs
-        membership_logits = membership_logits * decay_mat + (1-decay_mat) * -10
+        # n_trials = corr.shape[1]
 
-        return membership_logits
-
-    def forward(self, corr, actual_kc, n_batch_trials):
-        trans_logits, obs_logits, init_logits = self._get_kc_params()
-        if n_batch_trials == 0:
-            logits, log_alpha = self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
-            return logits 
-        
-        n_trials = corr.shape[1]
-
-        batch_logits = []
-        for i in range(0, n_trials, n_batch_trials):
-            to_trial = i + n_batch_trials
-            corr_block = corr[:, i:to_trial]
-            actual_kc_block = actual_kc[:, i:to_trial, :]
+        # batch_logits = []
+        # for i in range(0, n_trials, n_batch_trials):
+        #     to_trial = i + n_batch_trials
+        #     corr_block = corr[:, i:to_trial]
+        #     actual_kc_block = actual_kc[:, i:to_trial, :]
             
-            if i == 0:
-                logits, log_alpha = self.hmm(corr_block, actual_kc_block, trans_logits, obs_logits, init_logits)
-            else:
-                log_alpha = log_alpha.detach()
-                logits, log_alpha = self.hmm.forward_given_alpha(corr_block, actual_kc_block, 
-                    trans_logits, obs_logits, init_logits, log_alpha)
+        #     if i == 0:
+        #         logits, log_alpha = self.hmm(corr_block, actual_kc_block, trans_logits, obs_logits, init_logits)
+        #     else:
+        #         log_alpha = log_alpha.detach()
+        #         logits, log_alpha = self.hmm.forward_given_alpha(corr_block, actual_kc_block, 
+        #             trans_logits, obs_logits, init_logits, log_alpha)
             
-            batch_logits.append(logits)
+        #     batch_logits.append(logits)
         
-        return th.concat(batch_logits, dim=1)
+        # return th.concat(batch_logits, dim=1)
 
-        #return self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
-
-    def _get_kc_params(self):
-        kc_logits = self.kc_logits_f(self.kc_embd.weight) # Latent KCs x 5
+    def _get_kc_params(self, kc_reps):
+        kc_logits = self.kc_logits_f(kc_reps) # Latent KCs x 5
         trans_logits = th.hstack((-kc_logits[:, [0]], # 1-pL
                                   kc_logits[:, [1]],  # pF
                                   kc_logits[:, [0]],  # pL
@@ -483,18 +505,18 @@ class BktModel(nn.Module):
         return trans_logits, obs_logits, init_logits
 
     def get_params(self, problem_rep_mat):
-        with th.no_grad():
-            trans_logits, obs_logits, init_logits = self._get_kc_params()
+        # with th.no_grad():
+        #     trans_logits, obs_logits, init_logits = self._get_kc_params()
 
-            alpha = F.softmax(init_logits, dim=1) # n_chains x n_states
-            obs = F.softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
-            t = F.softmax(trans_logits, dim=1) # n_chains x n_states x n_states
+        #     alpha = F.softmax(init_logits, dim=1) # n_chains x n_states
+        #     obs = F.softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
+        #     t = F.softmax(trans_logits, dim=1) # n_chains x n_states x n_states
 
-            membership_logits = self._compute_membership_logits(problem_rep_mat)
-            kc_membership_probs = F.softmax(membership_logits, dim=1) # n_problems * n_latent_kcs
+        #     membership_logits = self._compute_membership_logits(problem_rep_mat)
+        #     kc_membership_probs = F.softmax(membership_logits, dim=1) # n_problems * n_latent_kcs
 
-            return alpha, obs, t, kc_membership_probs
-
+        #     return alpha, obs, t, kc_membership_probs
+        pass
 
 class MultiHmmCell(jit.ScriptModule):
     

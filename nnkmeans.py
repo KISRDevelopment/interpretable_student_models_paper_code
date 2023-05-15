@@ -35,7 +35,7 @@ def main():
 
 def train(cfg, X):
     
-    model = NNKmeans(cfg['n_clusters'], cfg['epsilon'], cfg['max_iterations'])
+    model = NNKmeans(cfg['epsilon'], cfg['max_iterations'])
     model = model.to(cfg['device'])
     
     #
@@ -55,10 +55,9 @@ def train(cfg, X):
 
 class NNKmeans(nn.Module):
 
-    def __init__(self, n_clusters, epsilon, max_iterations):
+    def __init__(self, epsilon, max_iterations):
         super().__init__()
 
-        self.n_clusters = n_clusters
         self.epsilon = epsilon
         self.max_iterations = max_iterations
 
@@ -66,6 +65,7 @@ class NNKmeans(nn.Module):
         """
             X: observations         n_obs x d
             Cinit: centroids        n_clusters x d
+            tau: temperature
         """
 
         C = Cinit
@@ -91,12 +91,16 @@ class NNKmeans(nn.Module):
             
             Ctilde = (A[:,:,None] * X[:,None,:]).sum(0) / attention_sums[:,None]
 
-            if th.all((C - Ctilde).abs() < self.epsilon):
+            diff = (C - Ctilde).square().sum(1).mean()
+
+            C = Ctilde 
+
+            if diff < self.epsilon:
                break
             
-            C = Ctilde 
+            
         
-        print("Terminated at ", i)
+        #print("Terminated at ", i)
         return A, C
 
 

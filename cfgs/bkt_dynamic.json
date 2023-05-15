@@ -2,16 +2,19 @@
     "learning_rate" : 0.01, 
     "epochs" : 100, 
     "patience" : 10,
-    "tau" : 1.5,
-    "n_latent_kcs" : 50,
+    "tau" : 1,
+    "n_latent_kcs" : 5,
     "latent_dim" : 10,
     "reg" : 0,
     "n_batch_seqs" : 50,
-    "n_batch_trials" : 50,
+    "n_batch_trials" : 0,
     "n_test_batch_seqs" : 200,
     "hard_samples" : false,
     "ref_labels" : null,
     "n_valid_samples" : 10,
     "n_test_samples" : 50,
-    "n_train_samples" : 5
+    "n_train_samples" : 10,
+    "kmeans_epsilon" : 1e-6,
+    "kmeans_tau" : 0.1,
+    "kmeans_max_iter" : 50
 }
