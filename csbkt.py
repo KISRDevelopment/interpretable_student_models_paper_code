@@ -6,17 +6,17 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import List, Tuple
 import torch.nn as nn 
+from numba import jit
 
 def main():
-    n_skills = 3
+    n_skills = 10
 
     decoder = make_state_decoder_matrix(n_skills)
     #print(decoder)
     assert decoder.shape[0] == 2**n_skills
 
-    im = make_transition_indicator_matrix(decoder)
-    print(im)
-
+    im = make_transition_indicator_matrix(decoder.numpy())
+    im = th.tensor(im).float()
 
     logit_pL = th.logit(th.tensor([0.2, 0.5, 0.05]).float()[:,None])
     logit_pF = th.logit(th.tensor([0.1, 0.3, 0.05]).float()[:,None])
@@ -70,8 +70,9 @@ def make_state_decoder_matrix(k):
             decoder: (2**K, K) matrix (Pytorch)
     """
     r = list(itertools.product([0, 1], repeat=k))
-    return th.tensor(r).float()
+    return np.array(r)
 
+@jit(nopython=False)
 def make_transition_indicator_matrix(decoder):
     """
         Returns a matrix that specifies how each skill transitions 
@@ -104,7 +105,7 @@ def make_transition_indicator_matrix(decoder):
                 im[i, j, l, 2] = diff[l] == -1
                 im[i, j, l, 3] = (diff[l] == 0) & (from_h[l] == 1)
     
-    return th.tensor(im).float()
+    return im
 
 @th.jit.script
 def make_initial_log_prob_vector(decoder, logit_pi):
@@ -162,9 +163,10 @@ class CsbktModel(nn.Module):
         """
         super(CsbktModel, self).__init__()
         
-        self.decoder = make_state_decoder_matrix(cfg['n_skills']).to(cfg['device'])
-        
-        self.tim = make_transition_indicator_matrix(self.decoder).to(cfg['device'])
+        decoder = make_state_decoder_matrix(cfg['n_skills'])
+        self.decoder = th.tensor(decoder).float().to(cfg['device'])
+
+        self.tim = th.tensor(make_transition_indicator_matrix(decoder)).float().to(cfg['device'])
         
         n_states = self.decoder.shape[0]
 

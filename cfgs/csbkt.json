@@ -1,5 +1,5 @@
 {
-    "n_skills" : 7,
+    "n_skills" : 9,
     "lr" : 0.1,
     "epochs" : 100,
     "patience" : 10,
