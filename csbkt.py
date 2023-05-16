@@ -42,7 +42,7 @@ def main():
     # obs_probs = th.tile(obs_probs[None, :, :, :], (n_batch, 1, 1, 1))
     # obs_log_probs = obs_probs.log()
     
-    n_skills = 10
+    n_skills = 5
     n_batch = 4 
     timesteps = 7 
     n_problems = 20
@@ -61,6 +61,13 @@ def main():
     log_prob, log_alpha = model(obs, problem_seq)
     print(log_prob.exp())
     #print(log_alpha.exp())
+
+    ml = model.get_membership_logits()
+
+    print(ml)
+
+    print(get_effective_assignment(ml))
+
 def make_state_decoder_matrix(k):
     """
         creates a lookup table that maps integer states into
@@ -157,6 +164,14 @@ def make_transition_log_prob_matrix(im, logit_pL, logit_pF):
     # finally, compute summation to get the log transition matrix
     return U.sum(2) # [n_total, n_total]
 
+def get_effective_assignment(membership_logits):
+
+    skills_range = np.arange(membership_logits.shape[1])
+
+    has_skill = membership_logits > 0
+
+    return np.sum(has_skill * np.power(2, skills_range[None,:]), axis=1)
+
 class CsbktModel(nn.Module):
     def __init__(self, cfg):
         """
@@ -222,6 +237,10 @@ class CsbktModel(nn.Module):
         
         return result, log_alpha
 
+    def get_membership_logits(self):
+        with th.no_grad():
+            return self.pred_layer.membership_logits.cpu().numpy()
+    
 class HmmCell(th.jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs):

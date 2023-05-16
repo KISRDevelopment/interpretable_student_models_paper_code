@@ -1,5 +1,5 @@
 {
-    "n_skills" : 7,
+    "n_skills" : 5,
     "pred_layer" : "nido",
     "lr" : 0.5,
     "epochs" : 100,

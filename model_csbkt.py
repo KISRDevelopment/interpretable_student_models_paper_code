@@ -55,6 +55,8 @@ def run(cfg, df, splits):
     
     results = []
     
+    ref_assignment = get_problem_skill_assignment(df)
+
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -80,6 +82,9 @@ def run(cfg, df, splits):
         ypred_test = np.exp(log_ypred_test)
 
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
+        
+        rand_index = compare_kc_assignment(model, ref_assignment)
+        run_result['rand_index'] = rand_index
         
         results.append(run_result)
         
@@ -189,6 +194,22 @@ def predict(model, seqs, cfg):
     model.train()
 
     return ytrue, ypred
+
+def compare_kc_assignment(model, ref_assignment):
+
+    membership_logits = model.get_membership_logits()
+    pred_assignment = csbkt.get_effective_assignment(membership_logits)
+
+    rand_index = sklearn.metrics.adjusted_rand_score(ref_assignment, pred_assignment)
+
+    return rand_index
+
+def get_problem_skill_assignment(df):
+
+    problems_to_skills = dict(zip(df['problem'], df['skill']))
+    n_problems = np.max(df['problem']) + 1
+    return np.array([problems_to_skills[p] for p in range(n_problems)])
+    
 
 if __name__ == "__main__":
     main()
