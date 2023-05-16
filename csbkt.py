@@ -194,6 +194,8 @@ class CsbktModel(nn.Module):
             self.pred_layer = NIDALayer(cfg['n_problems'], self.decoder)
         elif cfg['pred_layer'] == 'nido':
             self.pred_layer = NIDOLayer(cfg['n_problems'], self.decoder)
+        elif cfg['pred_layer'] == 'featurized_nido':
+            self.pred_layer = FeaturizedNIDOLayer(cfg['problem_feature_mat'], self.decoder, cfg['n_hidden'])
         # 
         # BKT HMM
         #
@@ -208,7 +210,7 @@ class CsbktModel(nn.Module):
 
         self.cfg = cfg 
 
-    def forward(self, corr, problem_seq):
+    def forward(self, corr, problem_seq, test=False):
         # [n_states, 1]
         initial_log_prob_vec = make_initial_log_prob_vector(self.decoder, self.kc_logit_pi[:,None])
 
@@ -216,12 +218,12 @@ class CsbktModel(nn.Module):
         initial_log_prob_vec = th.tile(initial_log_prob_vec.T, (corr.shape[0], 1)) 
 
         # [n_batch, t, 2]
-        return self.forward_given_alpha(corr, problem_seq, initial_log_prob_vec)
+        return self.forward_given_alpha(corr, problem_seq, initial_log_prob_vec, test)
         
 
-    def forward_given_alpha(self, corr, problem_seq, initial_log_prob_vec):
+    def forward_given_alpha(self, corr, problem_seq, initial_log_prob_vec, test):
         # [n_batch, t, n_states, 2]
-        obs_log_probs = self.pred_layer(problem_seq)
+        obs_log_probs = self.pred_layer(problem_seq, test)
 
         # [n_states, n_states] (Target x Source)
         trans_log_probs = make_transition_log_prob_matrix(self.tim, self.kc_logit_pL[:,None], self.kc_logit_pF[:,None])
@@ -239,7 +241,7 @@ class CsbktModel(nn.Module):
 
     def get_membership_logits(self):
         with th.no_grad():
-            return self.pred_layer.membership_logits.cpu().numpy()
+            return self.pred_layer.get_membership_logits().cpu().numpy()
     
 class HmmCell(th.jit.ScriptModule):
     
@@ -289,51 +291,6 @@ class HmmCell(th.jit.ScriptModule):
         
         return outputs, log_alpha
 
-class NIDALayer(th.jit.ScriptModule):
-
-    def __init__(self, n_problems, decoder):
-        super().__init__()
-
-        n_states, n_skills = decoder.shape 
-
-        self.skill_guess_logits = nn.Parameter(th.randn(n_skills))
-        self.skill_not_slip_logits = nn.Parameter(th.randn(n_skills))
-        self.membership_logits = nn.Parameter(th.randn(n_problems, n_skills))
-        
-        self.decoder = decoder # [n_states, n_skills]
-
-    @th.jit.script_method
-    def forward(self, problem_seq):
-        """
-            Input:
-                problem_seq: [n_batch, t]
-            Output:
-                obs_log_probs: [n_batch, t, n_states, 2]
-        """
-
-        #
-        # compute state logits
-        # 1xK + (1xK) * (SxK) = SxK 
-        # [n_states, n_skills]
-        #
-        guess_log_probs = F.logsigmoid(self.skill_guess_logits)[None,:] # n_skills
-        not_slip_log_probs = F.logsigmoid(self.skill_not_slip_logits)[None,:] # n_skills
-        state_log_probs = self.decoder * not_slip_log_probs + (1-self.decoder) * guess_log_probs # [n_states, n_skills]
-
-        #
-        # compute problem log probability of correctness
-        #
-        membership_probs = th.sigmoid(self.membership_logits) # [n_problems, n_skills]
-        problem_log_probs = membership_probs @ state_log_probs.T # [n_problems, n_states]
-
-        obs_log_prob_correct = problem_log_probs[problem_seq] # [n_batch, t, n_states]
-        obs_log_prob_incorrect = (1-th.sigmoid(obs_log_prob_correct)).log() # [n_batch, t, n_states]
-
-        # [n_batch, t, n_states, 2]
-        obs_log_probs = th.concat((obs_log_prob_incorrect[:,:,:,None], obs_log_prob_correct[:,:,:,None]), dim=3)
-
-        return obs_log_probs
-
 class NIDOLayer(th.jit.ScriptModule):
 
     def __init__(self, n_problems, decoder):
@@ -347,11 +304,17 @@ class NIDOLayer(th.jit.ScriptModule):
         
         self.decoder = decoder # [n_states, n_skills]
 
+    def get_membership_logits(self):
+        with th.no_grad():
+            return self.membership_logits
+        
     @th.jit.script_method
-    def forward(self, problem_seq):
+    def forward(self, problem_seq, test):
         """
             Input:
                 problem_seq: [n_batch, t]
+                test: whether this is testing or not, if testing the membership
+                will be thresholded at 0.5
             Output:
                 obs_log_probs: [n_batch, t, n_states, 2]
         """
@@ -367,6 +330,9 @@ class NIDOLayer(th.jit.ScriptModule):
         # compute problem logits
         #
         membership_probs = th.sigmoid(self.membership_logits) # [n_problems, n_skills]
+        if test:
+            membership_probs = (membership_probs > 0.5) * 1.0
+            
         problem_logits = membership_probs @ state_logits.T # [n_problems, n_states]
 
         obs_correct_logits = problem_logits[problem_seq] # [n_batch, t, n_states]
@@ -376,7 +342,58 @@ class NIDOLayer(th.jit.ScriptModule):
 
         return obs_log_probs
 
+class FeaturizedNIDOLayer(th.jit.ScriptModule):
 
+    def __init__(self, problem_feature_mat, decoder, n_hidden):
+        super().__init__()
+
+        n_states, n_skills = decoder.shape 
+
+        self.problem_feature_mat = problem_feature_mat
+
+        self.skill_offset = nn.Parameter(th.randn(n_skills))
+        self.skill_slope = nn.Parameter(th.randn(n_skills))
+        self.membership_logits = nn.Sequential(
+            nn.Linear(problem_feature_mat.shape[1], n_skills))
+        
+        self.decoder = decoder # [n_states, n_skills]
+
+    def get_membership_logits(self):
+        with th.no_grad():
+            return self.membership_logits(self.problem_feature_mat)
+    @th.jit.script_method
+    def forward(self, problem_seq, test):
+        """
+            Input:
+                problem_seq: [n_batch, t]
+                test: if true it will threshold memberships at 0.5
+            Output:
+                obs_log_probs: [n_batch, t, n_states, 2]
+        """
+
+        #
+        # compute state logits
+        # 1xK + (1xK) * (SxK) = SxK 
+        # [n_states, n_skills]
+        #
+        state_logits = self.skill_offset[None,:] + self.skill_slope[None,:] * self.decoder
+
+        #
+        # compute problem logits
+        #
+        membership_logits = self.membership_logits(self.problem_feature_mat) # [n_problems, n_skills]
+        membership_probs = th.sigmoid(membership_logits) # [n_problems, n_skills]
+        if test:
+            membership_probs = (membership_probs > 0.5) * 1.0
+            
+        problem_logits = membership_probs @ state_logits.T # [n_problems, n_states]
+
+        obs_correct_logits = problem_logits[problem_seq] # [n_batch, t, n_states]
+
+        # [n_batch, t, n_states, 2]
+        obs_log_probs = F.log_softmax(th.concat((-obs_correct_logits[:,:,:,None], obs_correct_logits[:,:,:,None]), dim=3), dim=3)
+
+        return obs_log_probs
         
 if __name__ == "__main__":
     main()

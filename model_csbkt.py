@@ -27,6 +27,10 @@ def main():
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
     cfg['device'] = 'cuda:0'
+    
+    if len(sys.argv) > 4:
+        problem_feature_mat_path = sys.argv[4]
+        cfg['problem_feature_mat_path'] = problem_feature_mat_path
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     
@@ -50,6 +54,13 @@ def run(cfg, df, splits):
     upper = np.percentile(gdf, q=97.5)
     print("95%% occurance range: %d-%d" % (lower,upper))
     print("# of problems occuring at least 10 times: %d" % np.sum(gdf >= 10))
+    
+    if cfg['pred_layer'] == 'featurized_nido':
+        problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
+        mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
+        std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
+        problem_feature_mat = (problem_feature_mat - mu) / std
+        cfg['problem_feature_mat'] = th.tensor(problem_feature_mat).float().to(cfg['device'])
     
     seqs = to_student_sequences(df)
     
@@ -85,7 +96,7 @@ def run(cfg, df, splits):
         
         rand_index = compare_kc_assignment(model, ref_assignment)
         run_result['rand_index'] = rand_index
-        
+
         results.append(run_result)
         
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
@@ -108,11 +119,9 @@ def train(train_seqs,
           cfg):
 
     model = csbkt.CsbktModel(cfg).to(cfg['device'])
-    print("Model created")
-
+    
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['lr'])
-    print("Optimizer created")
-
+    
     best_state = None
     best_auc_roc = 0.0
     waited = 0
@@ -176,7 +185,7 @@ def predict(model, seqs, cfg):
             batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
             batch_mask_seqs = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1).to(cfg['device'])
 
-            log_prob, _ = model(batch_obs_seqs, batch_problem_seqs)
+            log_prob, _ = model(batch_obs_seqs, batch_problem_seqs, test=True)
                 
             ypred = log_prob[:, :, 1].flatten()
             ytrue = batch_obs_seqs.flatten()
