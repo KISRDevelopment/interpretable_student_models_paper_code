@@ -16,7 +16,7 @@ import sklearn.metrics
 from scipy.stats import qmc
 import csbkt
 import sklearn.cluster
-
+import position_encode_problems
 def main():
     import sys
 
@@ -56,7 +56,12 @@ def run(cfg, df, splits):
     print("# of problems occuring at least 10 times: %d" % np.sum(gdf >= 10))
     
     if cfg['pred_layer'] == 'featurized_nido':
-        problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
+        if 'problem_feature_mat_path' in cfg:
+            problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
+        else:
+            problem_feature_mat = position_encode_problems.encode_problem_pos_distribs(df, n_problems)
+            #problem_feature_mat = th.tensor(problem_feature_mat).float().to(cfg['device'])
+
         mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
         std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
         problem_feature_mat = (problem_feature_mat - mu) / std
