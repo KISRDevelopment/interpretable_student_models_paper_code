@@ -9,56 +9,58 @@ import torch.nn as nn
 from numba import jit
 
 def main():
-    n_skills = 10
+    # n_skills = 10
 
-    decoder = make_state_decoder_matrix(n_skills)
-    #print(decoder)
-    assert decoder.shape[0] == 2**n_skills
+    # decoder = make_state_decoder_matrix(n_skills)
+    # #print(decoder)
+    # assert decoder.shape[0] == 2**n_skills
 
-    im = make_transition_indicator_matrix(decoder.numpy())
-    im = th.tensor(im).float()
+    # im = make_transition_indicator_matrix(decoder)
+    # im = th.tensor(im).float()
 
-    logit_pL = th.logit(th.tensor([0.2, 0.5, 0.05]).float()[:,None])
-    logit_pF = th.logit(th.tensor([0.1, 0.3, 0.05]).float()[:,None])
+    # logit_pL = th.logit(th.tensor([0.2, 0.5, 0.05]).float()[:,None])
+    # logit_pF = th.logit(th.tensor([0.1, 0.3, 0.05]).float()[:,None])
 
-    A = make_transition_log_prob_matrix(im, logit_pL, logit_pF)
-    print(A.exp())
-    assert th.allclose(A.exp().sum(1), th.ones(A.shape[0]))
+    # A = make_transition_log_prob_matrix(im.numpy(), logit_pL.numpy(), logit_pF.numpy())
+    # print(A.exp())
+    # assert th.allclose(A.exp().sum(1), th.ones(A.shape[0]))
 
-    logit_pi = th.logit(th.tensor([0.2, 0.5, 0.3])[:, None])
-    initial_log_prob_vec = make_initial_log_prob_vector(decoder, logit_pi)
-    print(initial_log_prob_vec.exp().sum())
+    # logit_pi = th.logit(th.tensor([0.2, 0.5, 0.3])[:, None])
+    # initial_log_prob_vec = make_initial_log_prob_vector(decoder, logit_pi)
+    # print(initial_log_prob_vec.exp().sum())
     
-    model = HmmCell(32, 2)
+    # n_skills = 10
+    # model = HmmCell(32, 2)
+    # n_batch = 4 
+    # timesteps = 7 
+
+    # trans_log_probs = A # [n_states, n_states]
+    # init_log_probs = th.tile(initial_log_prob_vec, (1, n_batch)).T # [n_batch, n_states]
+    
+    # obs_probs = th.softmax(th.randn(2**n_skills, 2), axis=1) # [n_states, 2]
+    # obs_probs = th.tile(obs_probs[None, :, :], (timesteps, 1, 1))
+    # obs_probs = th.tile(obs_probs[None, :, :, :], (n_batch, 1, 1, 1))
+    # obs_log_probs = obs_probs.log()
+    
+    n_skills = 10
     n_batch = 4 
     timesteps = 7 
+    n_problems = 20
 
-    trans_log_probs = A # [n_states, n_states]
-    init_log_probs = th.tile(initial_log_prob_vec, (1, n_batch)).T # [n_batch, n_states]
-    
-    obs_probs = th.softmax(th.randn(2**n_skills, 2), axis=1) # [n_states, 2]
-    obs_probs = th.tile(obs_probs[None, :, :], (timesteps, 1, 1))
-    obs_probs = th.tile(obs_probs[None, :, :, :], (n_batch, 1, 1, 1))
-    obs_log_probs = obs_probs.log()
-    
     obs = np.random.binomial(1, 0.5, (n_batch, timesteps))
     obs = th.tensor(obs).long()
 
-    n_problems = 20
-    nido_layer = NIDOLayer(n_problems, decoder)
+    decoder = make_state_decoder_matrix(n_skills)
 
+    nido_layer = NIDALayer(n_problems, th.tensor(decoder).float())
+    
     problem_seq = np.tile(np.random.permutation(n_problems)[:timesteps][None,:], (n_batch, 1))
     problem_seq = th.tensor(problem_seq).long()
 
-    obs_log_probs = nido_layer(problem_seq)
-    result,state = model(obs, trans_log_probs, obs_log_probs, init_log_probs)
-    print(result.exp())
-    print(state.exp())
-
-    model = CsbktModel({ 'n_skills' : n_skills, 'n_problems' : n_problems })
+    model = CsbktModel({ 'n_skills' : n_skills, 'n_problems' : n_problems, 'device' : 'cpu:0', 'pred_layer' : 'nida' })
     log_prob, log_alpha = model(obs, problem_seq)
     print(log_prob.exp())
-    print(log_alpha.exp())
+    #print(log_alpha.exp())
 def make_state_decoder_matrix(k):
     """
         creates a lookup table that maps integer states into
@@ -173,8 +175,10 @@ class CsbktModel(nn.Module):
         #
         # generates output predictions given state
         #
-        self.pred_layer = NIDOLayer(cfg['n_problems'], self.decoder)
-        
+        if cfg['pred_layer'] == 'nida':
+            self.pred_layer = NIDALayer(cfg['n_problems'], self.decoder)
+        elif cfg['pred_layer'] == 'nido':
+            self.pred_layer = NIDOLayer(cfg['n_problems'], self.decoder)
         # 
         # BKT HMM
         #
@@ -265,6 +269,51 @@ class HmmCell(th.jit.ScriptModule):
         outputs = th.transpose(outputs, 0, 1)
         
         return outputs, log_alpha
+
+class NIDALayer(th.jit.ScriptModule):
+
+    def __init__(self, n_problems, decoder):
+        super().__init__()
+
+        n_states, n_skills = decoder.shape 
+
+        self.skill_guess_logits = nn.Parameter(th.randn(n_skills))
+        self.skill_not_slip_logits = nn.Parameter(th.randn(n_skills))
+        self.membership_logits = nn.Parameter(th.randn(n_problems, n_skills))
+        
+        self.decoder = decoder # [n_states, n_skills]
+
+    @th.jit.script_method
+    def forward(self, problem_seq):
+        """
+            Input:
+                problem_seq: [n_batch, t]
+            Output:
+                obs_log_probs: [n_batch, t, n_states, 2]
+        """
+
+        #
+        # compute state logits
+        # 1xK + (1xK) * (SxK) = SxK 
+        # [n_states, n_skills]
+        #
+        guess_log_probs = F.logsigmoid(self.skill_guess_logits)[None,:] # n_skills
+        not_slip_log_probs = F.logsigmoid(self.skill_not_slip_logits)[None,:] # n_skills
+        state_log_probs = self.decoder * not_slip_log_probs + (1-self.decoder) * guess_log_probs # [n_states, n_skills]
+
+        #
+        # compute problem log probability of correctness
+        #
+        membership_probs = th.sigmoid(self.membership_logits) # [n_problems, n_skills]
+        problem_log_probs = membership_probs @ state_log_probs.T # [n_problems, n_states]
+
+        obs_log_prob_correct = problem_log_probs[problem_seq] # [n_batch, t, n_states]
+        obs_log_prob_incorrect = (1-th.sigmoid(obs_log_prob_correct)).log() # [n_batch, t, n_states]
+
+        # [n_batch, t, n_states, 2]
+        obs_log_probs = th.concat((obs_log_prob_incorrect[:,:,:,None], obs_log_prob_correct[:,:,:,None]), dim=3)
+
+        return obs_log_probs
 
 class NIDOLayer(th.jit.ScriptModule):
 
