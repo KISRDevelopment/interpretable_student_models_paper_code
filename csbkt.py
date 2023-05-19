@@ -7,6 +7,7 @@ from torch import Tensor
 from typing import List, Tuple
 import torch.nn as nn 
 from numba import jit
+import joint_pmf 
 
 def main():
     # n_skills = 10
@@ -52,22 +53,27 @@ def main():
 
     decoder = make_state_decoder_matrix(n_skills)
 
-    nido_layer = NIDALayer(n_problems, th.tensor(decoder).float())
+    nido_layer = NIDOLayer(n_problems, th.tensor(decoder).float())
     
     problem_seq = np.tile(np.random.permutation(n_problems)[:timesteps][None,:], (n_batch, 1))
     problem_seq = th.tensor(problem_seq).long()
 
-    model = CsbktModel({ 'n_skills' : n_skills, 'n_problems' : n_problems, 'device' : 'cpu:0', 'pred_layer' : 'nida' })
+    model = CsbktModel({ 'n_skills' : n_skills, 'n_problems' : n_problems, 'device' : 'cpu:0', 'pred_layer' : 'nido' })
     log_prob, log_alpha = model(obs, problem_seq)
     print(log_prob.exp())
-    #print(log_alpha.exp())
-
+    
     ml = model.get_membership_logits()
 
-    print(ml)
+    #print(ml)
 
-    print(get_effective_assignment(ml))
+    #print(get_effective_assignment(ml))
 
+    ml = th.ones((n_problems, n_skills)) * (-10)
+    ml[:, 0] = 10
+    
+    loss_layer = SequentialLossLayer(n_skills)
+    output = loss_layer(problem_seq, ml)
+    print(output.exp())
 def make_state_decoder_matrix(k):
     """
         creates a lookup table that maps integer states into
@@ -290,6 +296,49 @@ class HmmCell(th.jit.ScriptModule):
         outputs = th.transpose(outputs, 0, 1)
         
         return outputs, log_alpha
+
+class SequentialLossLayer(nn.Module):
+
+    def __init__(self, n_skills):
+        super().__init__()
+
+        #self.n_skills = n_skills 
+        self.pmf = joint_pmf.JointPMF(n_skills) # converts N independent bernoullis into 2**N categorical
+
+    def forward(self, problem_seq, membership_logits):
+        """
+            Computes the loglikelihood that consecutive problems have the 
+            same KC.
+
+            problem_seq: [n_batch, t]
+            membership_logits: [n_problems, n_skills]
+
+            Output:
+                logprob_same_kc: [n_batch, t]
+                First element is always 0
+                Subsequent elements i represent P(a_i == a_i-1)
+        """
+        outputs = th.jit.annotate(List[Tensor], [])
+        
+        last_problem = problem_seq[:, 0] # B
+        last_problem_logits = membership_logits[last_problem, :] # Bxn_skills
+        last_problem_logprobs = self.pmf(last_problem_logits) # Bx2**n_skills
+        for i in range(1, problem_seq.shape[1]):
+            
+            curr_problem = problem_seq[:, i] # B 
+            curr_problem_logits = membership_logits[curr_problem, :] # Bxn_skills 
+            curr_problem_logprobs = self.pmf(curr_problem_logits) # Bx2**n_skills
+
+            u = last_problem_logprobs + curr_problem_logprobs # Bx2**n_skills
+            logprob_same = th.logsumexp(u, dim=1) # B 
+            outputs += [logprob_same]
+
+            last_problem_logprobs = curr_problem_logprobs
+        
+        outputs = th.stack(outputs)
+        outputs = th.transpose(outputs, 0, 1) # Bx(T-1)
+        outputs = th.concat((th.zeros_like(curr_problem)[:,None], outputs), dim=1) #BxT
+        return outputs
 
 class NIDOLayer(th.jit.ScriptModule):
 
