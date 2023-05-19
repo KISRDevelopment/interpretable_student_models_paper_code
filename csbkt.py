@@ -354,9 +354,9 @@ class NIDOLayer(th.jit.ScriptModule):
         
         self.decoder = decoder # [n_states, n_skills]
 
+    @th.jit.script_method
     def get_membership_logits(self):
-        with th.no_grad():
-            return self.membership_logits
+        return self.membership_logits
         
     @th.jit.script_method
     def forward(self, problem_seq, test):
@@ -408,9 +408,10 @@ class FeaturizedNIDOLayer(th.jit.ScriptModule):
         
         self.decoder = decoder # [n_states, n_skills]
 
+    @th.jit.script_method
     def get_membership_logits(self):
-        with th.no_grad():
-            return self.membership_logits(self.problem_feature_mat)
+        return self.membership_logits(self.problem_feature_mat)
+
     @th.jit.script_method
     def forward(self, problem_seq, test):
         """

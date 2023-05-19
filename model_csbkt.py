@@ -145,7 +145,7 @@ def train(train_seqs,
             
         output, log_alpha = model(batch_obs_seqs, batch_problem_seqs)
 
-        logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.membership_logits).flatten() # B*T
+        logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.get_membership_logits()).flatten() # B*T
 
         train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
             
