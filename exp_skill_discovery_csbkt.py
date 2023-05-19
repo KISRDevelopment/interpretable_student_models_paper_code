@@ -63,6 +63,45 @@ def main():
         run_configuration(cfg, dataset_file, 
             output_path="%s/csbkt-%d.csv" % (results_dir, n_skills))
 
+        #
+        # Cheating BKT model with access to true Q-matrix
+        #
+        output_path = "%s/bkt-cheating-%d.csv" % (results_dir, n_skills)
+        cfg_path = "cfgs/bkt.json"
+        if os.path.exists(output_path):
+            print("Ignoring %s" % output_path)
+        else:
+            subprocess.call(['python', "torch_bkt.py", 
+                cfg_path,
+                dataset_file, 
+                output_path])
+        
+        #
+        # One KC Model
+        #
+        output_path = "%s/bkt-single_kc-%d.csv" % (results_dir, n_skills)
+        cfg_path = "cfgs/bkt_single_kc.json"
+        if os.path.exists(output_path):
+            print("Ignoring %s" % output_path)
+        else:
+            subprocess.call(['python', "torch_bkt.py", 
+                cfg_path,
+                dataset_file, 
+                output_path])
+
+        #
+        # BKT model that just uses problem IDs as skills
+        #
+        output_path = "%s/bkt-no_sd-%d.csv" % (results_dir, n_skills)
+        cfg_path = "cfgs/bkt_no_sd.json"
+        if os.path.exists(output_path):
+            print("Ignoring %s" % output_path)
+        else:
+            subprocess.call(['python', "torch_bkt.py", 
+                cfg_path,
+                dataset_file, 
+                output_path])
+
     results = generate_results(results_dir)
     
     gdf_mean = results.groupby(['model', 'n_skills'])['auc_roc'].mean()
