@@ -1,10 +1,11 @@
 {
     "n_skills" : 7,
-    "pred_layer" : "featurized_nido",
+    "pred_layer" : "nido",
     "lr" : 0.5,
     "epochs" : 100,
     "patience" : 10,
     "n_batch_seqs" : 50,
     "n_test_batch_seqs" : 50,
-    "n_hidden" : 10
+    "n_hidden" : 10,
+    "aux_loss_coeff" : 1
 }

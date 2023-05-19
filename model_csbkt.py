@@ -48,7 +48,7 @@ def run(cfg, df, splits):
     n_problems = np.max(df['problem']) + 1
     cfg['n_problems'] = n_problems
 
-    print("# of problems: %d" % n_problems)
+    print("# of problems: %d, Students: %d" % (n_problems, np.max(df['student'])+1))
     gdf = df.groupby('problem')['student'].count()
     lower = np.percentile(gdf, q=2.5)
     upper = np.percentile(gdf, q=97.5)
@@ -124,7 +124,8 @@ def train(train_seqs,
           cfg):
 
     model = csbkt.CsbktModel(cfg).to(cfg['device'])
-    
+    same_kc_loss = csbkt.SequentialLossLayer(cfg['n_skills']).to(cfg['device'])
+
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['lr'])
     
     best_state = None
@@ -144,11 +145,16 @@ def train(train_seqs,
             
             output, log_alpha = model(batch_obs_seqs, batch_problem_seqs)
 
+            logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.membership_logits).flatten() # B*T
+
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
             
             mask_ix = batch_mask_seqs.flatten()
+            
             train_loss = train_loss[mask_ix].mean() 
-
+            aux_loss = -logprob_same_kc[mask_ix].mean()
+            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
+            
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()

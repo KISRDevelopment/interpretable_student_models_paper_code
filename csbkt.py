@@ -297,7 +297,7 @@ class HmmCell(th.jit.ScriptModule):
         
         return outputs, log_alpha
 
-class SequentialLossLayer(nn.Module):
+class SequentialLossLayer(th.jit.ScriptModule):
 
     def __init__(self, n_skills):
         super().__init__()
@@ -305,6 +305,7 @@ class SequentialLossLayer(nn.Module):
         #self.n_skills = n_skills 
         self.pmf = joint_pmf.JointPMF(n_skills) # converts N independent bernoullis into 2**N categorical
 
+    @th.jit.script_method
     def forward(self, problem_seq, membership_logits):
         """
             Computes the loglikelihood that consecutive problems have the 
@@ -337,7 +338,7 @@ class SequentialLossLayer(nn.Module):
         
         outputs = th.stack(outputs)
         outputs = th.transpose(outputs, 0, 1) # Bx(T-1)
-        outputs = th.concat((th.zeros_like(curr_problem)[:,None], outputs), dim=1) #BxT
+        outputs = th.concat((th.zeros_like(problem_seq[:, 0])[:,None], outputs), dim=1) #BxT
         return outputs
 
 class NIDOLayer(th.jit.ScriptModule):
