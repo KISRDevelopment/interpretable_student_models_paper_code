@@ -135,31 +135,31 @@ def train(train_seqs,
         np.random.shuffle(train_seqs)
         losses = []
 
-        for offset in range(0, len(train_seqs), cfg['n_batch_seqs']):
-            end = offset + cfg['n_batch_seqs']
-            batch_seqs = train_seqs[offset:end]
+        offset = 0
+        end = offset + cfg['n_batch_seqs']
+        batch_seqs = train_seqs[offset:end]
 
-            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
-            batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
-            batch_mask_seqs = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1).to(cfg['device'])
+        batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+        batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+        batch_mask_seqs = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1).to(cfg['device'])
             
-            output, log_alpha = model(batch_obs_seqs, batch_problem_seqs)
+        output, log_alpha = model(batch_obs_seqs, batch_problem_seqs)
 
-            logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.membership_logits).flatten() # B*T
+        logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.membership_logits).flatten() # B*T
 
-            train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
+        train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
             
-            mask_ix = batch_mask_seqs.flatten()
+        mask_ix = batch_mask_seqs.flatten()
             
-            train_loss = train_loss[mask_ix].mean() 
-            aux_loss = -logprob_same_kc[mask_ix].mean()
-            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
+        train_loss = train_loss[mask_ix].mean() 
+        aux_loss = -logprob_same_kc[mask_ix].mean()
+        train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
             
-            optimizer.zero_grad()
-            train_loss.backward()
-            optimizer.step()
+        optimizer.zero_grad()
+        train_loss.backward()
+        optimizer.step()
 
-            losses.append(train_loss.item())
+        losses.append(train_loss.item())
         
         yvalid_true, yvalid_logprob_correct = predict(model, valid_seqs, cfg)
         auc_roc = metrics.calculate_metrics(yvalid_true, yvalid_logprob_correct)['auc_roc']

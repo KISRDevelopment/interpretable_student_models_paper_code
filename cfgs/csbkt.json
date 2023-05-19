@@ -7,5 +7,5 @@
     "n_batch_seqs" : 50,
     "n_test_batch_seqs" : 50,
     "n_hidden" : 10,
-    "aux_loss_coeff" : 1
+    "aux_loss_coeff" : 0
 }
