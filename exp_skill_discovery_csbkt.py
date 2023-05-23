@@ -12,7 +12,7 @@ def write_json(path, v):
 def main():
     
     ns_skills = [1, 5, 25, 50]
-    kcseq = 'blocked'
+    kcseq = 'interleaved'
     results_dir = './data/results-csbkt-%s' % kcseq
 
     os.makedirs(results_dir, exist_ok=True)

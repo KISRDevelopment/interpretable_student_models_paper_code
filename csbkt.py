@@ -53,27 +53,37 @@ def main():
 
     decoder = make_state_decoder_matrix(n_skills)
 
-    nido_layer = NIDOLayer(n_problems, th.tensor(decoder).float())
+    # nido_layer = NIDOLayer(n_problems, th.tensor(decoder).float())
     
     problem_seq = np.tile(np.random.permutation(n_problems)[:timesteps][None,:], (n_batch, 1))
     problem_seq = th.tensor(problem_seq).long()
 
-    model = CsbktModel({ 'n_skills' : n_skills, 'n_problems' : n_problems, 'device' : 'cpu:0', 'pred_layer' : 'nido' })
-    log_prob, log_alpha = model(obs, problem_seq)
-    print(log_prob.exp())
+    model = CsbktModel({ 'n_skills' : n_skills, 
+                         'n_problems' : n_problems, 
+                         'n_problem_io_embd' : 5,
+                         'n_lstm_size' : 100,
+                         'n_batch_size' : 5,
+                         'problem_encoder' : 'deep',
+                         'device' : 'cpu:0' })
+    problem_feature_mat = model.encode_problems(obs, problem_seq)
+    log_prob, log_alpha = model(obs, problem_seq, problem_feature_mat)
+    # print(log_prob.exp())
     
-    ml = model.get_membership_logits()
+    # ml = model.get_membership_logits()
 
-    #print(ml)
+    # #print(ml)
 
-    #print(get_effective_assignment(ml))
+    # #print(get_effective_assignment(ml))
 
-    ml = th.ones((n_problems, n_skills)) * (-10)
-    ml[:, 0] = 10
+    # ml = th.ones((n_problems, n_skills)) * (-10)
+    # ml[:, 0] = 10
     
-    loss_layer = SequentialLossLayer(n_skills)
-    output = loss_layer(problem_seq, ml)
-    print(output.exp())
+    # loss_layer = SequentialLossLayer(n_skills)
+    # output = loss_layer(problem_seq, ml)
+    # print(output.exp())
+
+    # pel = ProblemEncodingLayer(n_problems, 5, 9, 3)
+    # print(pel(obs.float(), problem_seq))
 def make_state_decoder_matrix(k):
     """
         creates a lookup table that maps integer states into
@@ -194,14 +204,18 @@ class CsbktModel(nn.Module):
         n_states = self.decoder.shape[0]
 
         #
+        # shallow encoder
+        #
+        if cfg['problem_encoder'] == 'shallow':
+            self.problem_encoder = ShallowProblemEncodingLayer(cfg['n_problems'], cfg['n_problem_io_embd'])
+        elif cfg['problem_encoder'] == 'deep':
+            self.problem_encoder = ProblemEncodingLayer(cfg['n_problems'], cfg['n_problem_io_embd'], cfg['n_lstm_size'], cfg['n_batch_size'], cfg['device'])
+        
+        #
         # generates output predictions given state
         #
-        if cfg['pred_layer'] == 'nida':
-            self.pred_layer = NIDALayer(cfg['n_problems'], self.decoder)
-        elif cfg['pred_layer'] == 'nido':
-            self.pred_layer = NIDOLayer(cfg['n_problems'], self.decoder)
-        elif cfg['pred_layer'] == 'featurized_nido':
-            self.pred_layer = FeaturizedNIDOLayer(cfg['problem_feature_mat'], self.decoder, cfg['n_hidden'])
+        self.pred_layer = FeaturizedNIDOLayer(cfg['n_problem_io_embd'], self.decoder)
+        
         # 
         # BKT HMM
         #
@@ -216,7 +230,13 @@ class CsbktModel(nn.Module):
 
         self.cfg = cfg 
 
-    def forward(self, corr, problem_seq, test=False):
+    def encode_problems(self, corr, problem_seq):
+        # get problem embedding
+        problem_feature_mat = self.problem_encoder(corr, problem_seq) # N_problems x H 
+
+        return problem_feature_mat
+
+    def forward(self, corr, problem_seq, problem_feature_mat, test=False):
         # [n_states, 1]
         initial_log_prob_vec = make_initial_log_prob_vector(self.decoder, self.kc_logit_pi[:,None])
 
@@ -224,12 +244,13 @@ class CsbktModel(nn.Module):
         initial_log_prob_vec = th.tile(initial_log_prob_vec.T, (corr.shape[0], 1)) 
 
         # [n_batch, t, 2]
-        return self.forward_given_alpha(corr, problem_seq, initial_log_prob_vec, test)
+        return self.forward_given_alpha(corr, problem_seq, initial_log_prob_vec, problem_feature_mat, test)
         
 
-    def forward_given_alpha(self, corr, problem_seq, initial_log_prob_vec, test):
+    def forward_given_alpha(self, corr, problem_seq, initial_log_prob_vec, problem_feature_mat, test):
+        
         # [n_batch, t, n_states, 2]
-        obs_log_probs = self.pred_layer(problem_seq, test)
+        obs_log_probs = self.pred_layer(problem_seq, problem_feature_mat, test)
 
         # [n_states, n_states] (Target x Source)
         trans_log_probs = make_transition_log_prob_matrix(self.tim, self.kc_logit_pL[:,None], self.kc_logit_pF[:,None])
@@ -245,9 +266,9 @@ class CsbktModel(nn.Module):
         
         return result, log_alpha
 
-    def get_membership_logits(self):
+    def get_membership_logits(self, problem_feature_mat):
         with th.no_grad():
-            return self.pred_layer.get_membership_logits().cpu().numpy()
+            return self.pred_layer.get_membership_logits(problem_feature_mat).cpu().numpy()
     
 class HmmCell(th.jit.ScriptModule):
     
@@ -341,82 +362,30 @@ class SequentialLossLayer(th.jit.ScriptModule):
         outputs = th.concat((th.zeros_like(problem_seq[:, 0])[:,None], outputs), dim=1) #BxT
         return outputs
 
-class NIDOLayer(th.jit.ScriptModule):
-
-    def __init__(self, n_problems, decoder):
-        super().__init__()
-
-        n_states, n_skills = decoder.shape 
-
-        self.skill_offset = nn.Parameter(th.randn(n_skills))
-        self.skill_slope = nn.Parameter(th.randn(n_skills))
-        self.membership_logits = nn.Parameter(th.randn(n_problems, n_skills))
-        
-        self.decoder = decoder # [n_states, n_skills]
-
-    @th.jit.script_method
-    def get_membership_logits(self):
-        return self.membership_logits
-        
-    @th.jit.script_method
-    def forward(self, problem_seq, test):
-        """
-            Input:
-                problem_seq: [n_batch, t]
-                test: whether this is testing or not, if testing the membership
-                will be thresholded at 0.5
-            Output:
-                obs_log_probs: [n_batch, t, n_states, 2]
-        """
-
-        #
-        # compute state logits
-        # 1xK + (1xK) * (SxK) = SxK 
-        # [n_states, n_skills]
-        #
-        state_logits = self.skill_offset[None,:] + self.skill_slope[None,:] * self.decoder
-
-        #
-        # compute problem logits
-        #
-        membership_probs = th.sigmoid(self.membership_logits) # [n_problems, n_skills]
-        if test:
-            membership_probs = (membership_probs > 0.5) * 1.0
-            
-        problem_logits = membership_probs @ state_logits.T # [n_problems, n_states]
-
-        obs_correct_logits = problem_logits[problem_seq] # [n_batch, t, n_states]
-
-        # [n_batch, t, n_states, 2]
-        obs_log_probs = F.log_softmax(th.concat((-obs_correct_logits[:,:,:,None], obs_correct_logits[:,:,:,None]), dim=3), dim=3)
-
-        return obs_log_probs
-
 class FeaturizedNIDOLayer(th.jit.ScriptModule):
 
-    def __init__(self, problem_feature_mat, decoder, n_hidden):
+    def __init__(self, n_problem_features, decoder):
         super().__init__()
 
         n_states, n_skills = decoder.shape 
-
-        self.problem_feature_mat = problem_feature_mat
 
         self.skill_offset = nn.Parameter(th.randn(n_skills))
         self.skill_slope = nn.Parameter(th.randn(n_skills))
         self.membership_logits = nn.Sequential(
-            nn.Linear(problem_feature_mat.shape[1], n_skills))
+            nn.Linear(n_problem_features, n_skills))
         
         self.decoder = decoder # [n_states, n_skills]
 
     @th.jit.script_method
-    def get_membership_logits(self):
-        return self.membership_logits(self.problem_feature_mat)
+    def get_membership_logits(self, problem_feature_mat):
+        return self.membership_logits(problem_feature_mat)
 
     @th.jit.script_method
-    def forward(self, problem_seq, test):
+    def forward(self, problem_seq, problem_feature_mat, test):
         """
             Input:
                 problem_seq: [n_batch, t]
+                problem_feature_mat: [n_problems, h]
                 test: if true it will threshold memberships at 0.5
             Output:
                 obs_log_probs: [n_batch, t, n_states, 2]
@@ -432,7 +401,7 @@ class FeaturizedNIDOLayer(th.jit.ScriptModule):
         #
         # compute problem logits
         #
-        membership_logits = self.membership_logits(self.problem_feature_mat) # [n_problems, n_skills]
+        membership_logits = self.membership_logits(problem_feature_mat) # [n_problems, n_skills]
         membership_probs = th.sigmoid(membership_logits) # [n_problems, n_skills]
         if test:
             membership_probs = (membership_probs > 0.5) * 1.0
@@ -445,6 +414,75 @@ class FeaturizedNIDOLayer(th.jit.ScriptModule):
         obs_log_probs = F.log_softmax(th.concat((-obs_correct_logits[:,:,:,None], obs_correct_logits[:,:,:,None]), dim=3), dim=3)
 
         return obs_log_probs
+
+class ShallowProblemEncodingLayer(nn.Module):
+    def __init__(self, n_problems, n_problem_io_embd):
+        super().__init__()
+
+        self.n_problems = n_problems 
+        self.problem_input_embd = nn.Embedding(n_problems, n_problem_io_embd)
+    
+    def forward(self, obs, problem_seq):
+        """
+            obs: [n_batch, t]
+            problem_seq: [n_batch, t]
+            Output:
+                [n_problems, H]
+        """
+        return self.problem_input_embd(th.arange(self.n_problems))
+
+class ProblemEncodingLayer(nn.Module):
+
+    def __init__(self, n_problems, n_problem_io_embd, n_lstm_size, n_batch_size, device):
+        super().__init__()
+
+        self.n_batch_size = n_batch_size
+
+        self.n_problems = n_problems 
+        self.idx_problems = th.arange(n_problems).to(device)
+        self.problem_input_embd = nn.Embedding(n_problems, n_problem_io_embd)
+        self.cell = nn.LSTM(n_problem_io_embd + 1, n_lstm_size, num_layers=1, batch_first=True, bidirectional=True)
         
+        # generates a problem's final embedding based on the 
+        # averaged LSTM state
+        self.ff = nn.Sequential(
+            nn.Linear(n_lstm_size*2 + n_problem_io_embd, n_problem_io_embd),
+            nn.ReLU())
+    
+    def forward(self, obs, problem_seq):
+        """
+            obs: [n_batch, t]
+            problem_seq: [n_batch, t]
+            Output:
+                [n_problems, H]
+        """
+
+        all_outputs = []
+        for offset in range(0, obs.shape[0], self.n_batch_size):
+            end = offset + self.n_batch_size
+
+            batch_problem_seq = problem_seq[offset:end, :]
+            batch_obs = obs[offset:end, :]
+
+            # embd problems
+            problem_input_embd = self.problem_input_embd(batch_problem_seq) # n_batch, t, n_problem_io_embd
+
+            # attach to observations
+            cell_input = th.concat((problem_input_embd, batch_obs[:,:,None]), dim=2) # BxTxH+1
+            _, last_state = self.cell(cell_input) # last_state: BxS
+            _, cn = last_state # 2 x B x S
+            #cell_rep = cn.mean(1).flatten() # 2*S
+            all_outputs.append(cn)
+        
+        cell_rep = th.concat(all_outputs, dim=1) # 2 x B x S
+        cell_rep = cn.mean(1).flatten() # 2*S
+        
+        # get all problem's representations and attach to LSTM's final representation
+        cell_rep = th.tile(cell_rep[None,:], (self.n_problems, 1)) # Px2*S
+        ff_input = th.concat((cell_rep, self.problem_input_embd(self.idx_problems)), dim=1)
+
+        # generate problem embeddings
+        return self.ff(ff_input) # PxH
+
 if __name__ == "__main__":
     main()

@@ -93,13 +93,15 @@ def run(cfg, df, splits):
 
         model = train(train_seqs, valid_seqs, cfg)
         
-        ytrue_test, log_ypred_test = predict(model, test_seqs, cfg)
+        support_seqs = [seqs[s] for s in (train_students | valid_students)]
+
+        ytrue_test, log_ypred_test, problem_feature_mat = predict(model, support_seqs, test_seqs, cfg)
         
         ypred_test = np.exp(log_ypred_test)
 
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         
-        rand_index = compare_kc_assignment(model, ref_assignment)
+        rand_index = compare_kc_assignment(model, problem_feature_mat, ref_assignment)
         run_result['rand_index'] = rand_index
 
         results.append(run_result)
@@ -139,21 +141,29 @@ def train(train_seqs,
         end = offset + cfg['n_batch_seqs']
         batch_seqs = train_seqs[offset:end]
 
+        batch_support_seqs = train_seqs[end:]
+
+        # first encode the problem representation using the rest of the set
+        batch_support_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_support_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+        batch_support_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_support_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+        problem_feature_mat = model.encode_problems(batch_support_obs_seqs, batch_support_problem_seqs)
+        
+        # now decode via BKT
         batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
         batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
         batch_mask_seqs = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1).to(cfg['device'])
-            
-        output, log_alpha = model(batch_obs_seqs, batch_problem_seqs)
-
-        logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.get_membership_logits()).flatten() # B*T
+        
+        output, log_alpha = model(batch_obs_seqs, batch_problem_seqs, problem_feature_mat)
+        
+        #logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.get_membership_logits()).flatten() # B*T
 
         train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
             
         mask_ix = batch_mask_seqs.flatten()
             
         train_loss = train_loss[mask_ix].mean() 
-        aux_loss = -logprob_same_kc[mask_ix].mean()
-        train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
+        #aux_loss = -logprob_same_kc[mask_ix].mean()
+        #train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
             
         optimizer.zero_grad()
         train_loss.backward()
@@ -161,7 +171,8 @@ def train(train_seqs,
 
         losses.append(train_loss.item())
         
-        yvalid_true, yvalid_logprob_correct = predict(model, valid_seqs, cfg)
+        yvalid_true, yvalid_logprob_correct, _ = predict(model, train_seqs, valid_seqs, cfg)
+        
         auc_roc = metrics.calculate_metrics(yvalid_true, yvalid_logprob_correct)['auc_roc']
 
         if auc_roc > best_auc_roc:
@@ -180,8 +191,13 @@ def train(train_seqs,
     return model
     
 
-def predict(model, seqs, cfg):
+def predict(model, support_seqs, seqs, cfg):
     model.eval()
+
+    support_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in support_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+    support_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in support_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+    problem_feature_mat = model.encode_problems(support_obs_seqs, support_problem_seqs)
+
     seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
     
     with th.no_grad():
@@ -196,7 +212,7 @@ def predict(model, seqs, cfg):
             batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
             batch_mask_seqs = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1).to(cfg['device'])
 
-            log_prob, _ = model(batch_obs_seqs, batch_problem_seqs, test=True)
+            log_prob, _ = model(batch_obs_seqs, batch_problem_seqs, problem_feature_mat, test=True)
                 
             ypred = log_prob[:, :, 1].flatten()
             ytrue = batch_obs_seqs.flatten()
@@ -213,11 +229,11 @@ def predict(model, seqs, cfg):
         ytrue = np.hstack(all_ytrue)
     model.train()
 
-    return ytrue, ypred
+    return ytrue, ypred, problem_feature_mat
 
-def compare_kc_assignment(model, ref_assignment):
+def compare_kc_assignment(model, problem_feature_mat, ref_assignment):
 
-    membership_logits = model.get_membership_logits()
+    membership_logits = model.get_membership_logits(problem_feature_mat)
     pred_assignment = csbkt.get_effective_assignment(membership_logits)
 
     rand_index = sklearn.metrics.adjusted_rand_score(ref_assignment, pred_assignment)

@@ -5,7 +5,8 @@ import json
 import pandas as pd 
 
 def main():
-    os.makedirs('data/results-model-comp', exist_ok=True)
+    output_dir = 'data/results-pytorch'
+    os.makedirs(output_dir, exist_ok=True)
     
     datasets = ['gervetetal_assistments12', 
         'gervetetal_bridge_algebra06', 
@@ -27,7 +28,7 @@ def main():
         "n_test_batch_seqs" : 500,
         "cfg_name" : "bkt"
     }
-    run_model(cfg, model_script, datasets, 'data/results-model-comp')
+    run_model(cfg, model_script, datasets, output_dir)
 
     model_script = 'torch_bkt_problems.py'
     cfg = {
@@ -38,7 +39,7 @@ def main():
         "n_test_batch_seqs" : 500,
         "cfg_name" : "bkt-problems"
     }
-    run_model(cfg, model_script, datasets, 'data/results-model-comp')
+    run_model(cfg, model_script, datasets, output_dir)
 
     model_script = 'torch_bkt_abilities.py'
     cfg = {
@@ -51,7 +52,7 @@ def main():
         "max_ability" : 3,
         "cfg_name" : "bkt-abilities"
     }
-    run_model(cfg, model_script, datasets, 'data/results-model-comp')
+    run_model(cfg, model_script, datasets, output_dir)
 
     model_script = 'torch_bkt_irt.py'
     cfg = {
@@ -64,7 +65,7 @@ def main():
         "max_ability" : 3,
         "cfg_name" : "bkt-irt"
     }
-    run_model(cfg, model_script, datasets, 'data/results-model-comp')
+    run_model(cfg, model_script, datasets, output_dir)
 
     model_script = 'torch_bkt_skill_discovery.py'
     cfg = {
@@ -85,7 +86,37 @@ def main():
         "n_train_samples" : 1,
         "cfg_name" : "bkt-sd"
     }
-    run_model(cfg, model_script, datasets, 'data/results-model-comp')
+    run_model(cfg, model_script, datasets, output_dir)
+
+    model_script = "model_csbkt.py"
+    cfg = {
+        "n_skills" : 7,
+        "pred_layer" : "nido",
+        "lr" : 0.5,
+        "epochs" : 100,
+        "patience" : 10,
+        "n_batch_seqs" : 50,
+        "n_test_batch_seqs" : 50,
+        "aux_loss_coeff" : 1.0,
+        "n_hidden" : 10,
+        "cfg_name" : "csbkt-aux_loss"
+    }
+    run_model(cfg, model_script, datasets, output_dir)
+
+    model_script = "model_csbkt.py"
+    cfg = {
+        "n_skills" : 7,
+        "pred_layer" : "nido",
+        "lr" : 0.5,
+        "epochs" : 100,
+        "patience" : 10,
+        "n_batch_seqs" : 50,
+        "n_test_batch_seqs" : 50,
+        "aux_loss_coeff" : 0.0,
+        "n_hidden" : 10,
+        "cfg_name" : "csbkt"
+    }
+    run_model(cfg, model_script, datasets, output_dir)
 
 def run_model(cfg, model_script, datasets, base_path):
     with open('tmp/model_cfg.json', 'w') as f:
