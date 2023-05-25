@@ -7,53 +7,48 @@ import numpy.random as rng
 import pandas as pd 
 from collections import defaultdict
 
+import sklearn.metrics
+import copy 
 import itertools
 def main():
 
-    test_loss()
+    #test_loss()
 
-    seqs = generate_dataset(100, 20, 10)
+    train()
 
-    obs, ytrue = to_arrays(seqs, 20)
-
-    train(obs, ytrue)
-
-def train(obs, ytrue):
+def train():
     cfg = {
-        "n_lstm_size" : 50,
-        "lr" : 0.01,
-        "epochs" : 50,
+        "n_lstm_size" : 10,
+        "lr" : 0.1,
+        "epochs" : 200,
         "n_batch_size" : 10,
-        "p_valid" : 0.2
+        "n_train_seqs" : 80,
+        "n_valid_seqs" : 20,
+        "n_skills" : 5,
+        "n_trials_per_skill" : 10,
+        "patience" : 50
     }
     model = KCDiscoverer(cfg['n_lstm_size'])
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['lr'])
     
-    idx = rng.permutation(obs.shape[0])
 
-    n_valid = int(cfg['p_valid'] * obs.shape[0])
-    valid_idx = idx[:n_valid]
-    train_idx = idx[n_valid:]
-    
-    train_obs = obs[train_idx, :]
-    train_ytrue = ytrue[train_idx,:,:]
+    valid_seqs = generate_dataset(cfg['n_valid_seqs'], cfg['n_skills'], cfg['n_trials_per_skill'])
+    valid_obs, valid_ytrue = to_arrays(valid_seqs, cfg['n_skills'])
 
-    valid_obs = th.tensor(obs[valid_idx, :]).float()
-    valid_ytrue = th.tensor(ytrue[valid_idx, :, :]).float()
+    train_seqs = generate_dataset(cfg['n_train_seqs'], cfg['n_skills'], cfg['n_trials_per_skill'])
+    train_obs, train_ytrue = to_arrays(train_seqs, cfg['n_skills'])
 
-    print("Train size: %d, valid: %d" % (train_obs.shape[0], valid_obs.shape[0]))
+    best_auc_roc = 0
+    waited = 0
+    best_state = None 
     for e in range(cfg['epochs']):
-        ix = rng.permutation(train_obs.shape[0])
-
-        train_obs = train_obs[ix, :]
-        train_ytrue = train_ytrue[ix, :, :]
-
+        
         losses = []
         for offset in range(0, train_obs.shape[0], cfg['n_batch_size']):
             end = offset + cfg['n_batch_size']
 
-            batch_obs = th.tensor(train_obs[offset:end, :]).float()
-            batch_ytrue = th.tensor(train_ytrue[offset:end, :, :]).float()
+            batch_obs = train_obs[offset:end, :].float()
+            batch_ytrue = train_ytrue[offset:end, :, :].float()
 
             membership_logits = model(batch_obs)
             
@@ -68,9 +63,23 @@ def train(obs, ytrue):
         with th.no_grad():
             membership_logits = model(valid_obs)
             
-            valid_loss = min_filtering_loss(membership_logits, valid_ytrue)
+            #valid_loss = min_filtering_loss(membership_logits, valid_ytrue)
             
-            print("%5d Train loss: %8.4f, Valid: %8.4f" % (e, np.mean(losses), valid_loss.numpy()))
+            auc_roc = min_filtering_auc_roc(membership_logits.cpu().numpy(), valid_ytrue.cpu().numpy())
+            
+            if auc_roc > best_auc_roc:
+                best_auc_roc = auc_roc
+                waited = 0
+                best_state = copy.deepcopy(model.state_dict())
+            else:
+                waited += 1
+            
+            print("%5d Train loss: %8.4f, AUC-ROC: %0.2f %s" % (e, np.mean(losses), auc_roc, '***' if waited == 0 else ''))
+
+            if waited >= cfg['patience']:
+                break 
+    
+    model.load_state_dict(best_state)
 
 
 def generate_dataset(n_students, n_skills, n_trials_per_skill):
@@ -121,7 +130,7 @@ def generate_skill_params(n_skills):
 
     all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
 
-    print("Choosing from %d combinations with replacement" % all_prob_combs.shape[0])
+    #print("Choosing from %d combinations with replacement" % all_prob_combs.shape[0])
 
     probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=True, size=n_skills), :]
     
@@ -145,7 +154,7 @@ def to_arrays(seqs, n_skills):
     
     ytrue = np.array(possible_answers_seqs)
     
-    return obs_seq, ytrue
+    return th.tensor(obs_seq).float(), th.tensor(ytrue).float()
 
 
 def test_loss():
@@ -198,10 +207,27 @@ def min_filtering_loss(membership_logits, ytrue):
     # Bx1xT * BxKxT = BxKxT
     ll = membership_log_probs[:,None,:] * ytrue  + nonmembership_log_probs[:,None,:] * (1-ytrue)
 
-    # BxT
+    # BxK
+    ll = ll.mean(2)
+
+    # B
     mfl,_ = th.max(ll, dim=1)
 
     return -mfl.mean()
+
+def min_filtering_auc_roc(pred_membership, ytrue):
+    """
+        pred_membership: B x T
+        ytrue: B x K x T
+    """
+    result = np.zeros((ytrue.shape[0], ytrue.shape[1]))
+    for k in range(ytrue.shape[1]):
+        for b in range(ytrue.shape[0]):
+            actual_seq = ytrue[b, k, :] # T 
+            mem_seq = pred_membership[b, :] # T 
+            result[b, k] = sklearn.metrics.roc_auc_score(actual_seq, mem_seq)
+    
+    return np.mean(np.max(result, axis=1))
 
 if __name__ == "__main__":
     main()
