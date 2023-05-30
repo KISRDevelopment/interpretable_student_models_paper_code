@@ -11,6 +11,8 @@ from collections import defaultdict
 import sklearn.metrics
 import copy 
 import itertools
+
+import meta_learning_losses
 def main():
 
     #test_loss()
@@ -20,12 +22,12 @@ def main():
 def train():
     cfg = {
         "n_lstm_size" : 10,
-        "lr" : 0.1,
+        "lr" : 0.5,
         "epochs" : 200,
-        "n_batch_size" : 2,
+        "n_batch_size" : 5,
         "n_train_seqs" : 80,
         "n_valid_seqs" : 20,
-        "max_n_skills" : 20,
+        "max_n_skills" : 10,
         "max_n_trials_per_skill" : 10,
         "patience" : 50
     }
@@ -48,16 +50,15 @@ def train():
 
             batch_seqs = train_seqs[offset:end]
 
-            batch_obs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).float() # BxT
+            batch_obs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).long() # BxT
             
             obs_mask = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) >= 0).float() # BxT
             batch_skill_seqs = pad_sequence([th.tensor(s['skill']) for s in batch_seqs], batch_first=True, padding_value=-1)
             batch_ytrue, skill_mask = make_ytrue(batch_skill_seqs, cfg['max_n_skills']) # BxKxT
 
-            membership_logits = model(batch_obs) # BxT
-            membership_logits = membership_logits * obs_mask - 10 * (1-obs_mask) # padding trials will not be members
+            membership_logits, kc_logits = model(batch_obs) # BxT and Bx5
 
-            train_loss = min_filtering_loss(membership_logits, obs_mask, batch_ytrue, skill_mask)
+            train_loss = meta_learning_losses.loss_func(batch_obs, membership_logits, kc_logits, batch_ytrue, obs_mask, skill_mask)
             
             optimizer.zero_grad()
             train_loss.backward()
@@ -71,7 +72,7 @@ def train():
             batch_skill_seqs = pad_sequence([th.tensor(s['skill']) for s in valid_seqs], batch_first=True, padding_value=-1)
             valid_ytrue, skill_mask = make_ytrue(batch_skill_seqs, cfg['max_n_skills']) # BxKxT
 
-            membership_logits = model(valid_obs)
+            membership_logits, _ = model(valid_obs)
             
             auc_roc = min_filtering_auc_roc(membership_logits.cpu().numpy(), obs_mask.cpu().numpy(), valid_ytrue.cpu().numpy(), skill_mask.cpu().numpy())
             
@@ -179,28 +180,13 @@ def make_ytrue(skill_seqs, max_n_skills):
 
     return ytrue.float(), mask.float()
 
-
-
-# def test_loss():
-
-#     membership_logits = th.tensor([[-10, 10, 10, 10, -10]]).float() 
-#     ytrue = th.tensor([
-#         [
-#             [1, 0, 0, 0, 1],
-#             [0, 1, 1, 1, 0]
-#         ]
-#     ]).float()
-
-#     print(min_filtering_loss(membership_logits, ytrue))
-
-
 class KCDiscoverer(nn.Module):
 
     def __init__(self, n_lstm_size):
         super().__init__()
         self.cell = nn.LSTM(1, 
             n_lstm_size, 
-            num_layers=3, 
+            num_layers=1, 
             bidirectional=True, 
             batch_first=True)
         self.ff = nn.Linear(n_lstm_size*2, 1)
@@ -214,39 +200,13 @@ class KCDiscoverer(nn.Module):
                 kc_param_logits: BxTx
         """
         
-        cell_output,_ = self.cell(obs_seq[:,:,None])
-        logits = self.ff(cell_output)[:,:,0]
-        #kc_param_logits = self.kc_ff(cell_output)
-        return logits #, kc_param_logits
-        
-def min_filtering_loss(membership_logits, obs_mask, ytrue, skill_mask):
-    """
-        Input:
-            membership_logits: BxT
-            obs_mask: BxT
-            ytrue: BxKxT
-            skill_mask: BxKxT
-            where K is the number of valid answers.
-            If a skill has no assignment then it is not considered in the loss.
-        Output:
-            loss
-    """
-    membership_log_probs = F.logsigmoid(membership_logits) # BxT
-    nonmembership_log_probs = F.logsigmoid(-membership_logits) # BxT
-    
-    # Bx1xT * BxKxT = BxKxT
-    ll = membership_log_probs[:,None,:] * ytrue  + nonmembership_log_probs[:,None,:] * (1-ytrue)
+        cell_output, (hn, cn) = self.cell(obs_seq[:,:,None].float())
+        cn = th.permute(cn, (1, 2, 0)) # BxHx2
+        cn = th.reshape(cn, (cn.shape[0], cn.shape[1] * cn.shape[2])) # Bx2*H
 
-    ll = obs_mask[:,None,:] * ll
-    
-    # BxK / Bx1 = BxK
-    ll = ll.sum(2) / obs_mask.sum(1)[:,None]
-    ll = ll * skill_mask + (1-skill_mask) * -10
-
-    # B
-    mfl,_ = th.max(ll, dim=1)
-    
-    return -mfl.mean()
+        logits = self.ff(cell_output)[:,:,0] # BxT
+        kc_param_logits = self.kc_ff(cn) # Bx5
+        return logits , kc_param_logits
 
 def min_filtering_auc_roc(pred_membership, obs_mask, ytrue, skill_mask):
     """
@@ -265,117 +225,13 @@ def min_filtering_auc_roc(pred_membership, obs_mask, ytrue, skill_mask):
             actual_seq = actual_seq[mask]
             mem_seq = mem_seq[mask]
 
-            result[b, k] = sklearn.metrics.balanced_accuracy_score(actual_seq, mem_seq > 0) * skill_mask[b, k]
-            
+            if np.unique(actual_seq).shape[0] > 1:
+                result[b, k] = sklearn.metrics.balanced_accuracy_score(actual_seq, mem_seq > 0) * skill_mask[b, k]
+            else:
+                result[b, k] = 0.5
     return np.mean(np.max(result, axis=1))
 
-# class MultiHmmCell(jit.ScriptModule):
-    
-#     def __init__(self):
-#         super(MultiHmmCell, self).__init__()
 
-#     @jit.script_method
-#     def forward(self, obs: Tensor, chain: Tensor, 
-#         trans_logits: Tensor, 
-#         obs_logits: Tensor, 
-#         init_logits: Tensor) -> Tuple[Tensor, Tensor]:
-
-#         n_batch = obs.shape[0]
-#         log_alpha = F.log_softmax(init_logits, dim=1) # n_chains x n_states
-#         log_alpha = th.tile(log_alpha, (n_batch, 1, 1)) # batch x chains x states
-#         return self.forward_given_alpha(obs, chain, trans_logits, obs_logits, init_logits, log_alpha)
-    
-#     @jit.script_method
-#     def forward_given_alpha(self, obs: Tensor, chain: Tensor, 
-#         trans_logits: Tensor, 
-#         obs_logits: Tensor, 
-#         init_logits: Tensor,
-#         log_alpha: Tensor) -> Tuple[Tensor, Tensor]:
-#         """
-#             Input:
-#                 obs: [n_batch, t]
-#                 chain: [n_batch, t, n_chains]
-#                 trans_logits: [n_chains, n_states, n_states] (Target, Source)
-#                 obs_logits: [n_chains, n_states, n_outputs]
-#                 init_logits: [n_chains, n_states]
-#                 log_alpha: [n_batch, n_chains, n_states]
-#             output:
-#                 logits: [n_batch, t, n_outputs]
-#                 log_alpha: [n_batch, n_chains, n_states]
-#         """
-
-#         n_chains, n_states, n_outputs = obs_logits.shape 
-
-#         outputs = th.jit.annotate(List[Tensor], [])
-        
-#         n_batch, _ = obs.shape
-#         batch_idx = th.arange(n_batch)
-
-        
-#         log_obs = F.log_softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
-#         log_t = F.log_softmax(trans_logits, dim=1) # n_chains x n_states x n_states
-        
-#         # B X C X S
-#         for i in range(0, obs.shape[1]):
-#             curr_chain = chain[:,i,:] # B X C
-            
-#             # predict
-#             a1 = (curr_chain[:,:,None, None] * log_obs[None,:,:,:]).sum(1) # B X S X O
-#             a2 = (curr_chain[:,:,None] * log_alpha).sum(1) # BXCX1 * BXCXS = BXS
-
-#             # B X S X O + B X S X 1
-#             log_py = th.logsumexp(a1 + a2[:,:,None], dim=1)  # B X O
-            
-#             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
-#             outputs += [log_py]
-
-#             # update
-#             curr_y = obs[:,i]
-#             a1 = th.permute(log_obs[:,:,curr_y], (2, 0, 1)) # B X C X S
-#             log_py = (a1 * curr_chain[:,:,None]).sum(1) # B X S
-            
-
-#             a1 = (log_alpha * curr_chain[:,:,None]).sum(1) # BxCxS * BxCx1 = BxS
-#             a2 = (log_t[None,:,:,:] * curr_chain[:,:,None,None]).sum(1) # 1xCxSxS * BxCx1x1 = BxSxS
-#             a3 = th.logsumexp(log_py[:,None,:] + a1[:,None,:] + a2, dim=2)
-
-#             # B x 1 X S + B x 1 x S + B x S x S = B x S
-#             log_alpha = (1 - curr_chain[:,:,None]) * log_alpha + curr_chain[:,:,None] * a3[:,None,:]
-        
-        
-#         outputs = th.stack(outputs)
-#         outputs = th.transpose(outputs, 0, 1)
-        
-#         return outputs, log_alpha
-def cluster(model, obs, problem_seq, n_problems):
-
-    """
-        obs: BxT
-        problem_seq: BxT
-
-        For each sequence, first determine which problems belong to the same skill
-        then aggregate all these problems.
-
-        Remove the selected problems then
-        iterate
-    """
-
-    assigned = th.zeros_like(obs).bool() # BxT
-
-    clusters = []
-    with th.no_grad():
-        while True:
-
-            membership_logits = model(obs) * (1-assigned) + assigned * -10 # BxT
-            hard_membership = (membership_logits > 0.) # BxT
-            assigned = assigned | hard_membership
-
-            assigned_problems = problem_seq[hard_membership] 
-            cluster = th.zeros(n_problems)
-            cluster[assigned_problems] = 1
-            clusters.append(cluster)
-    
-    Q = th.concat(clusters, dim=0)
 
 if __name__ == "__main__":
     main()
