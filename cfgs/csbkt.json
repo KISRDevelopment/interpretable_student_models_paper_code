@@ -6,10 +6,10 @@
     "patience" : 10,
     "n_batch_seqs" : 50,
     "n_test_batch_seqs" : 50,
-    "aux_loss_coeff" : 1,
+    "aux_loss_coeff" : 2,
     "n_problem_io_embd" : 10,
     "n_lstm_size" : 50,
     "n_batch_size" : 50,
     "problem_encoder" : "shallow",
-    "lags" : [1, 2, 4, 8, 16, 32]
+    "max_lag" : 30
 }

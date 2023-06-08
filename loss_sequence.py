@@ -43,7 +43,9 @@ def mean_logprob_same_at_lag(problem_seq: Tensor, mask_ix: Tensor, membership_lo
                 Average log P(a_i == a_i-lag)
     """
 
-
+    if lag >= problem_seq.shape[1]:
+        return th.ones(problem_seq.shape[0]) * -100.0
+    
     prev_problem = problem_seq[:, :-lag] # BxT-L
     curr_problem = problem_seq[:, lag:]  # BxT-L
     mask_ix = mask_ix[:, lag:] # BxT-L
