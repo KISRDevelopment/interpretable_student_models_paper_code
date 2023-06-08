@@ -11,8 +11,8 @@ import joint_pmf
 
 def main():
     n_skills = 4
-    n_batch = 4 
-    timesteps = 7 
+    n_batch = 50 
+    timesteps = 100
     n_problems = 20
 
     problem_seq = np.tile(np.random.permutation(n_problems)[:timesteps][None,:], (n_batch, 1))
@@ -24,28 +24,14 @@ def main():
     #loss_layer = NbackLoss(n_skills, [1])
     #output = loss_layer(problem_seq, ml, th.ones_like(problem_seq).float())
     
-    pmf = joint_pmf.JointPMF(n_skills)
-    membership_logprobs = last_problem_logprobs = pmf(ml) # Bx2**n_skills
+    
+    membership_logprobs = pmf(ml) # Bx2**n_skills
             
     print(nback_loss(problem_seq, th.ones_like(problem_seq).float(), membership_logprobs, [1, 2, 3, 10]))
     #print(nback_loss(problem_seq, th.ones_like(problem_seq).float(), membership_logprobs, 3))
-    
-def nback_loss(problem_seq, mask_ix, membership_logprobs, lags):
 
-    outputs = th.jit.annotate(List[Tensor], [])
-    for lag in lags:
-        # B
-        mean_logprob_same = mean_logprob_same_at_lag(problem_seq, mask_ix, membership_logprobs, lag)
-        outputs.append(mean_logprob_same)
-    
-    outputs = th.stack(outputs) # lags x B
-    outputs = outputs.T # Bxlags 
-
-    mfl, _ = th.min(-outputs, 1)
-
-    return mfl 
-
-def mean_logprob_same_at_lag(problem_seq, mask_ix, membership_logprobs, lag):
+@th.jit.script
+def mean_logprob_same_at_lag(problem_seq: Tensor, mask_ix: Tensor, membership_logprobs: Tensor, lag: int):
     """
         Input:
             problem_seq: BxT
@@ -79,5 +65,20 @@ def mean_logprob_same_at_lag(problem_seq, mask_ix, membership_logprobs, lag):
     
     return mean_logprob_same
 
+@th.jit.script
+def nback_loss(problem_seq: Tensor, mask_ix: Tensor, membership_logprobs: Tensor, lags: List[int]):
+    
+    outputs = th.jit.annotate(List[Tensor], [])
+    for lag in lags:
+        # B
+        mean_logprob_same = mean_logprob_same_at_lag(problem_seq, mask_ix, membership_logprobs, lag)
+        outputs.append(mean_logprob_same)
+    
+    outputs = th.stack(outputs) # lags x B
+    outputs = outputs.T # Bxlags 
+
+    mfl, _ = th.min(-outputs, 1)
+
+    return mfl.mean()
 if __name__ == "__main__":
     main()
