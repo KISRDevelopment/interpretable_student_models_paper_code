@@ -152,7 +152,7 @@ def train(train_seqs,
         train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
         
         mlogprobs = pmf(model.pred_layer.get_membership_logits())
-        aux_loss = loss_sequence.nback_loss(batch_problem_seqs, batch_mask_seqs, mlogprobs, np.arange(1, cfg['max_lag']+1))
+        aux_loss = loss_sequence.nback_loss(batch_problem_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
 
         mask_ix = batch_mask_seqs.flatten()
             

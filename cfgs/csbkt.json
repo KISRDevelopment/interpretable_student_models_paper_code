@@ -11,5 +11,6 @@
     "n_lstm_size" : 50,
     "n_batch_size" : 50,
     "problem_encoder" : "shallow",
-    "max_lag" : 30
+    "max_lag" : 25,
+    "min_lag" : 1
 }

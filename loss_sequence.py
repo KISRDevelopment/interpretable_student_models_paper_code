@@ -10,25 +10,32 @@ from numba import jit
 import joint_pmf 
 
 def main():
-    n_skills = 4
-    n_batch = 50 
-    timesteps = 100
-    n_problems = 20
-
-    problem_seq = np.tile(np.random.permutation(n_problems)[:timesteps][None,:], (n_batch, 1))
-    problem_seq = th.tensor(problem_seq).long()
     
+    # membership logits
+    membership_logits = th.tensor([
+        [3, -3, -3],        # 0
+        [3, -3, -4],        # 1
+        [-3, 4, -2],        # 2
+        [-3, 5, -2],        # 3
+        [-10, 0, 10],       # 4
+        [10, 0, 0]          # 5
+    ]).float()
 
-    ml = th.randn((n_problems, n_skills))
+    # sequence 
+    problem_seq = th.tensor([
+        [0, 1, 2, 0, 1, 2, 3]
+    ])
 
-    #loss_layer = NbackLoss(n_skills, [1])
-    #output = loss_layer(problem_seq, ml, th.ones_like(problem_seq).float())
+    # only first 4 trials
+    mask_ix = th.tensor([[1, 1, 1, 1, 1, 0, 0]]).float()
+
+    membership_logprobs = F.log_softmax(membership_logits, 1)
     
-    
-    membership_logprobs = pmf(ml) # Bx2**n_skills
-            
-    print(nback_loss(problem_seq, th.ones_like(problem_seq).float(), membership_logprobs, [1, 2, 3, 10]))
-    #print(nback_loss(problem_seq, th.ones_like(problem_seq).float(), membership_logprobs, 3))
+    r = mean_logprob_same_at_lag(problem_seq, mask_ix, membership_logprobs, 2)
+    print(r)
+
+    r = nback_loss(problem_seq, mask_ix, membership_logprobs, [1, 2, 3, 4, 5])
+    print(r)
 
 @th.jit.script
 def mean_logprob_same_at_lag(problem_seq: Tensor, mask_ix: Tensor, membership_logprobs: Tensor, lag: int):
@@ -43,26 +50,27 @@ def mean_logprob_same_at_lag(problem_seq: Tensor, mask_ix: Tensor, membership_lo
                 Average log P(a_i == a_i-lag)
     """
 
+    # if lag is bigger than input size, return max loss
     if lag >= problem_seq.shape[1]:
         return th.ones(problem_seq.shape[0]) * -100.0
     
+    #
+    # probability that n-lag problems are the same
+    #
     prev_problem = problem_seq[:, :-lag] # BxT-L
     curr_problem = problem_seq[:, lag:]  # BxT-L
-    mask_ix = mask_ix[:, lag:] # BxT-L
-
     prev_logprobs = membership_logprobs[prev_problem] # BxT-LxK
     curr_logprobs = membership_logprobs[curr_problem] # BxT-LxK
-
     u = prev_logprobs + curr_logprobs # BxT-LxK
-
     logprob_same = th.logsumexp(u, dim=2) # BxT-L 
-
-    # masked elements are not counted in the average logprob, B
+    
+    # compute average logprob on valid trials, B
+    mean_logprob_same = (logprob_same * mask_ix[:, lag:]).sum(1) / mask_ix[:, lag:].sum(1)
+    
+    # sequence length has to be twice the lag at minimum
+    # so that we get one cycle at least
     seq_lens = mask_ix.sum(1) # B
-    mean_logprob_same = (logprob_same * mask_ix).sum(1) / seq_lens
-
-    # set sequences whose length is less than the lag to maximum loss
-    less_than_lag_ix = seq_lens <= lag 
+    less_than_lag_ix = seq_lens < (2*lag)
     mean_logprob_same[less_than_lag_ix] = -100
     
     return mean_logprob_same
