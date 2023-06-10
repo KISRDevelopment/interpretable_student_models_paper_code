@@ -17,6 +17,8 @@ import json
 import time 
 import early_stopping_rules 
 
+import sklearn.metrics 
+
 class MultiHmmCell(jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs, n_chains):
@@ -115,6 +117,8 @@ def train(cfg, train_seqs, valid_seqs):
 
         n_seqs = len(train_seqs) if cfg['full_epochs'] else n_batch_seqs
 
+        tic = time.perf_counter()
+
         for offset in range(0, n_seqs, n_batch_seqs):
             end = offset + n_batch_seqs
             batch_seqs = train_seqs[offset:end]
@@ -136,15 +140,26 @@ def train(cfg, train_seqs, valid_seqs):
             optimizer.step()
 
             losses.append(train_loss.item())
-        
+        toc = time.perf_counter()
+        print("Train time: %f" % (toc - tic))
+
         mean_train_loss = np.mean(losses)
 
         #
         # Validation
         #
+        tic = time.perf_counter()
         ytrue, ypred = predict(cfg, model, valid_seqs)
+        toc = time.perf_counter()
+        print("Predict time: %f" % (toc - tic))
 
-        auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
+        print("Evaluation:")
+        print(ytrue.shape, ytrue.dtype)
+        print(ypred.shape, ypred.dtype)
+        tic = time.perf_counter()
+        auc_roc = sklearn.metrics.roc_auc_score(ytrue, ypred)
+        toc = time.perf_counter()
+        print("Evaluation time: %f" % (toc - tic))
 
         stop_training, new_best = stopping_rule.log(auc_roc)
 
@@ -162,8 +177,10 @@ def train(cfg, train_seqs, valid_seqs):
     
 
 def predict(cfg, model, seqs):
+
     model.eval()
     seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
+
     with th.no_grad():
         all_ypred = []
         all_ytrue = []
@@ -185,12 +202,12 @@ def predict(cfg, model, seqs):
             ytrue = ytrue[mask_ix]
 
             all_ypred.append(ypred.cpu().numpy())
-            all_ytrue.append(ytrue.cpu().numpy())
+            all_ytrue.append(ytrue.cpu().int().numpy())
             
         ypred = np.hstack(all_ypred)
         ytrue = np.hstack(all_ytrue)
     model.train()
-
+    
     return ytrue, ypred
 
 
@@ -223,9 +240,7 @@ def main(cfg, df, splits):
         test_seqs = [seqs[s] for s in test_students]
 
         tic = time.perf_counter()
-
         model = train(cfg, train_seqs, valid_seqs)
-
         ytrue_test, log_ypred_test = predict(cfg, model, test_seqs)
         toc = time.perf_counter()
 

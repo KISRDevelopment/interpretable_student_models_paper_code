@@ -1,6 +1,6 @@
 {
     "learning_rate" : 0.5, 
-    "epochs" : 100, 
+    "epochs" : 5, 
     "es_patience" : 10,
     "es_thres" : 0.01,
     "n_train_batch_seqs" : 500,

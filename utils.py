@@ -1,6 +1,7 @@
 import itertools
 import json
 import numpy as np
+
 def load_json(path):
     with open(path, 'r') as f:
         return json.load(f)
@@ -58,3 +59,33 @@ def hyperparam_combs(d):
     sets = [d[k] for k in keys]
     
     return [ dict(zip(keys, s)) for s in itertools.product(*sets) ]
+
+def calc_padded_len(n, m):
+    """
+        Computes how much padding to add to a list of length n so that the
+        length is a multiple of m
+    """
+    return int( np.ceil(n / m) * m )
+
+def pad_to_multiple(seqs, multiple, padding_value):
+    """
+        padds the sequences length to the nearest multiple of the given number
+    """
+    new_seqs = []
+
+    max_len = np.max([len(s) for s in seqs])
+    padded_len = calc_padded_len(max_len, multiple)
+
+    new_seqs = np.ones((len(seqs), padded_len)) * -1
+
+    for i, seq in enumerate(seqs):
+        new_seqs[i, :len(seq)] = seq
+    
+    return new_seqs
+
+
+if __name__ == "__main__":
+    seqs = [[0, 1, 1, 0], [0, 1]]
+
+    print(pad_to_multiple(seqs, 3, -1))
+
