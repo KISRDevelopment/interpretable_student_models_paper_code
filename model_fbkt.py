@@ -17,6 +17,7 @@ from collections import defaultdict
 import metrics 
 import copy 
 
+import early_stopping_rules
 import time 
 
 def main():
@@ -71,12 +72,6 @@ def run(cfg, df, splits):
 
         ypred_correct = np.exp(log_ypred_correct)
 
-        # with th.no_grad():
-        #     param_alpha, param_obs, param_t = model.get_params()
-        #     all_params['alpha'].append(param_alpha.cpu().numpy())
-        #     all_params['obs'].append(param_obs.cpu().numpy())
-        #     all_params['t'].append(param_t.cpu().numpy())
-
         run_result = metrics.calculate_metrics(ytrue, ypred_correct)
         run_result['time_diff_sec'] = toc - tic 
 
@@ -100,15 +95,17 @@ def train(cfg, train_seqs, valid_seqs):
     model = BktModel(cfg['n_kcs'], cfg['fastbkt_n'], cfg['device'])
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
     
-    best_val_metric = 0.0
-    waited = 0
+    stopping_rule = early_stopping_rules.PatienceRule(cfg['es_patience'], cfg['es_thres'], minimize=False)
+
     best_state = None
     for e in range(cfg['epochs']):
         np.random.shuffle(train_seqs)
         losses = []
 
-        for offset in range(0, len(train_seqs), cfg['train_batch_size']):
-            end = offset + cfg['train_batch_size']
+        n_seqs = len(train_seqs) if cfg['full_epochs'] else cfg['n_train_batch_seqs']
+
+        for offset in range(0, n_seqs, cfg['n_train_batch_seqs']):
+            end = offset + cfg['n_train_batch_seqs']
             batch_seqs = train_seqs[offset:end]
             
             # prepare model input
@@ -129,22 +126,24 @@ def train(cfg, train_seqs, valid_seqs):
 
             losses.append(train_loss.item())
         
+        mean_train_loss = np.mean(losses)
+
+
         #
         # Validation
         #
         ytrue, ypred = predict(cfg, model, valid_seqs)
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
-
-        if auc_roc > best_val_metric:
-            best_val_metric = auc_roc
-            waited = 0
-            best_state = copy.deepcopy(model.state_dict())
-        else:
-            waited += 1
         
-        print("Train loss: %8.4f, Valid AUC-ROC: %4.2f %s" % (np.mean(losses), auc_roc, '***' if waited == 0 else ''))
-        if waited > cfg['patience']:
-            break 
+        stop_training, new_best = stopping_rule.log(auc_roc)
+
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if new_best else ''))
+        
+        if new_best:
+            best_state = copy.deepcopy(model.state_dict())
+        
+        if stop_training:
+            break
     
     model.load_state_dict(best_state)
     return model
@@ -155,8 +154,8 @@ def predict(cfg, model, seqs):
     with th.no_grad():
         all_ypred = []
         all_ytrue = []
-        for offset in range(0, len(seqs), cfg['test_batch_size']):
-            end = offset + cfg['test_batch_size']
+        for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
+            end = offset + cfg['n_test_batch_seqs']
             batch_seqs = seqs[offset:end]
 
             batch_obs_seqs = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=0).to(cfg['device'])
