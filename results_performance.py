@@ -5,8 +5,8 @@ import os
 
 MODEL_NAMES = {
     'bkt-brute-force' : 'Brute Force',
-    'torch-bkt' : 'torch-bkt',
-    'torch-bkt-fast' : 'torch-bkt-fast',
+    'bkt' : 'BKT RNN',
+    'fbkt' : 'BKT RNN Hybrid',
     'ref-bkt': 'hmm-scalable'
 }
 
