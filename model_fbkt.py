@@ -34,15 +34,19 @@ def main():
     cfg['n_kcs'] = np.max(df['skill']) + 1
     cfg['device'] = 'cuda:0'
 
-    results_df = run(cfg, df, splits) 
-    
+    results_df, all_params = run(cfg, df, splits) 
     results_df.to_csv(output_path)
+
+    param_output_path = output_path.replace(".csv", ".params.npy")
+    np.savez(param_output_path, **all_params)
 
 def run(cfg, df, splits):
 
     seqs = to_student_sequences(df)
     
     results = []
+    all_params = defaultdict(list)
+
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -60,9 +64,7 @@ def run(cfg, df, splits):
 
         train_seqs = [seqs[s] for s in train_students]
         valid_seqs = [seqs[s] for s in valid_students]
-        
-        test_seqs = split_seqs_by_kc([seqs[s] for s in test_students])
-        test_seqs = sorted(test_seqs, reverse=True, key=lambda s: len(s[1]))
+        test_seqs = [seqs[s] for s in test_students]
         
         # Train & Test
         tic = time.perf_counter()
@@ -76,22 +78,28 @@ def run(cfg, df, splits):
         run_result['time_diff_sec'] = toc - tic 
 
         results.append(run_result)
+
+        with th.no_grad():
+            param_alpha, param_obs, param_t = model.get_params()
+            all_params['alpha'].append(param_alpha.cpu().numpy())
+            all_params['obs'].append(param_obs.cpu().numpy())
+            all_params['t'].append(param_t.cpu().numpy())
+        
         print(run_result)
         
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
     print(results_df)
     
-    return results_df
+    return results_df, all_params
 
 def train(cfg, train_seqs, valid_seqs):
     
-    train_seqs = split_seqs_by_kc(train_seqs)
+    #train_seqs = split_seqs_by_kc(train_seqs)
 
-    valid_seqs = split_seqs_by_kc(valid_seqs)
-    valid_seqs = sorted(valid_seqs, reverse=True, key=lambda s: len(s[1]))
+    #valid_seqs = split_seqs_by_kc(valid_seqs)
+    #valid_seqs = sorted(valid_seqs, reverse=True, key=lambda s: len(s[1]))
 
-    print("# train seqs: %d, valid: %d" % (len(train_seqs), len(valid_seqs)))
-
+    
     model = BktModel(cfg['n_kcs'], cfg['fastbkt_n'], cfg['device'])
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
     
@@ -106,7 +114,7 @@ def train(cfg, train_seqs, valid_seqs):
 
         for offset in range(0, n_seqs, cfg['n_train_batch_seqs']):
             end = offset + cfg['n_train_batch_seqs']
-            batch_seqs = train_seqs[offset:end]
+            batch_seqs = split_seqs_by_kc(train_seqs[offset:end])
             
             # prepare model input
             batch_obs_seqs = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=0).to(cfg['device'])
@@ -150,14 +158,17 @@ def train(cfg, train_seqs, valid_seqs):
 
         
 def predict(cfg, model, seqs):
+
     model.eval()
     with th.no_grad():
         all_ypred = []
         all_ytrue = []
         for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
             end = offset + cfg['n_test_batch_seqs']
-            batch_seqs = seqs[offset:end]
-
+            batch_seqs = split_seqs_by_kc(seqs[offset:end])
+            batch_seqs = sorted(batch_seqs, reverse=True, key=lambda s: len(s[1]))
+            #print("Batch size: %d, effective: %d" % (len(seqs[offset:end]), len(batch_seqs)))
+            
             batch_obs_seqs = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=0).to(cfg['device'])
             batch_kc = th.tensor([kc for kc, _ in batch_seqs]).long().to(cfg['device'])
             mask = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=-1).to(cfg['device']) > -1
@@ -234,6 +245,26 @@ class BktModel(nn.Module):
         logits = self._logits(kc) # Bx5
         return self._model(corr, logits)
 
+    def get_params(self):
+        
+        kc_logits = self._logits.weight
+        trans_logits = th.hstack((-kc_logits[:, [0]], # 1-pL
+                                kc_logits[:, [1]],  # pF
+                                kc_logits[:, [0]],  # pL
+                                -kc_logits[:, [1]])).reshape((-1, 2, 2)) # 1-pF (Latent KCs x 2 x 2)
+        obs_logits = th.hstack((-kc_logits[:, [2]], # 1-pG
+                                kc_logits[:, [2]],  # pG
+                                kc_logits[:, [3]],  # pS
+                                -kc_logits[:, [3]])).reshape((-1, 2, 2)) # 1-pS (Latent KCs x 2 x 2)
+        init_logits = th.hstack((-kc_logits[:, [4]], kc_logits[:, [4]])) # (Latent KCs x 2)
+
+
+        alpha = F.softmax(init_logits, dim=1) # n_chains x n_states
+        obs = F.softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
+        t = F.softmax(trans_logits, dim=1) # n_chains x n_states x n_states
+        
+        return alpha, obs, t
+    
 class FastBkt(jit.ScriptModule):
 
     def __init__(self, n, device):

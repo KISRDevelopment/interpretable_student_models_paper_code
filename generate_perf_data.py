@@ -20,7 +20,8 @@ def main():
         4096,
         8192,
         16384,
-        32768
+        32768,
+        65536
     ]
     n_skills = 50
     n_trials_per_skill = 10
