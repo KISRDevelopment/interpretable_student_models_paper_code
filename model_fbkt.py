@@ -102,10 +102,10 @@ def train(cfg, train_seqs, valid_seqs):
     #valid_seqs = split_seqs_by_kc(valid_seqs)
     #valid_seqs = sorted(valid_seqs, reverse=True, key=lambda s: len(s[1]))
 
-    tic = time.perf_counter()
+    # tic = time.perf_counter()
     model = BktModel(cfg['n_kcs'], cfg['fastbkt_n'], cfg['device'])
-    toc = time.perf_counter()
-    print("Model creation: %f" % (toc - tic))
+    # toc = time.perf_counter()
+    #print("Model creation: %f" % (toc - tic))
 
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
     
@@ -116,12 +116,12 @@ def train(cfg, train_seqs, valid_seqs):
 
     best_state = None
 
-    tic_global = time.perf_counter()
+    #tic_global = time.perf_counter()
     for e in range(cfg['epochs']):
         np.random.shuffle(train_seqs)
         losses = []
 
-        tic = time.perf_counter()
+        # tic = time.perf_counter()
         for offset in range(0, n_seqs, cfg['n_train_batch_seqs']):
             end = offset + cfg['n_train_batch_seqs']
             batch_seqs = split_seqs_by_kc(train_seqs[offset:end])
@@ -143,25 +143,25 @@ def train(cfg, train_seqs, valid_seqs):
             optimizer.step()
 
             losses.append(train_loss.item())
-        toc = time.perf_counter()
-        print("Train time: %f" % (toc - tic))
+        # toc = time.perf_counter()
+        #print("Train time: %f" % (toc - tic))
         mean_train_loss = np.mean(losses)
        
         #
         # Validation
         #
-        tic = time.perf_counter()   
+        # tic = time.perf_counter()   
         ytrue, ypred = predict(cfg, model, valid_seqs)
-        toc = time.perf_counter()
-        print("Predict time: %f" % (toc - tic))
+        # toc = time.perf_counter()
+        #print("Predict time: %f" % (toc - tic))
 
-        print("Evaluation:")
-        print(ytrue.shape, ytrue.dtype)
-        print(ypred.shape, ypred.dtype)
-        tic = time.perf_counter()
+        # print("Evaluation:")
+        # print(ytrue.shape, ytrue.dtype)
+        # print(ypred.shape, ypred.dtype)
+        # tic = time.perf_counter()
         auc_roc = sklearn.metrics.roc_auc_score(ytrue, ypred)
-        toc = time.perf_counter()
-        print("Evaluation time: %f" % (toc - tic))
+        # toc = time.perf_counter()
+        #print("Evaluation time: %f" % (toc - tic))
         stop_training, new_best = stopping_rule.log(auc_roc)
 
         print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if new_best else ''))
@@ -171,8 +171,8 @@ def train(cfg, train_seqs, valid_seqs):
         
         if stop_training:
             break
-    toc_global = time.perf_counter()
-    print("Total train time: %f" % (toc_global - tic_global))
+    # toc_global = time.perf_counter()
+    # print("Total train time: %f" % (toc_global - tic_global))
 
     model.load_state_dict(best_state)
     return model

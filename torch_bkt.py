@@ -117,7 +117,7 @@ def train(cfg, train_seqs, valid_seqs):
 
         n_seqs = len(train_seqs) if cfg['full_epochs'] else n_batch_seqs
 
-        tic = time.perf_counter()
+        #tic = time.perf_counter()
 
         for offset in range(0, n_seqs, n_batch_seqs):
             end = offset + n_batch_seqs
@@ -140,26 +140,26 @@ def train(cfg, train_seqs, valid_seqs):
             optimizer.step()
 
             losses.append(train_loss.item())
-        toc = time.perf_counter()
-        print("Train time: %f" % (toc - tic))
+        # toc = time.perf_counter()
+        # print("Train time: %f" % (toc - tic))
 
         mean_train_loss = np.mean(losses)
 
         #
         # Validation
         #
-        tic = time.perf_counter()
+        #tic = time.perf_counter()
         ytrue, ypred = predict(cfg, model, valid_seqs)
-        toc = time.perf_counter()
-        print("Predict time: %f" % (toc - tic))
+        #toc = time.perf_counter()
+        #print("Predict time: %f" % (toc - tic))
 
-        print("Evaluation:")
-        print(ytrue.shape, ytrue.dtype)
-        print(ypred.shape, ypred.dtype)
-        tic = time.perf_counter()
+        #print("Evaluation:")
+        #print(ytrue.shape, ytrue.dtype)
+        #print(ypred.shape, ypred.dtype)
+        #tic = time.perf_counter()
         auc_roc = sklearn.metrics.roc_auc_score(ytrue, ypred)
-        toc = time.perf_counter()
-        print("Evaluation time: %f" % (toc - tic))
+        #toc = time.perf_counter()
+        #print("Evaluation time: %f" % (toc - tic))
 
         stop_training, new_best = stopping_rule.log(auc_roc)
 
