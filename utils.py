@@ -76,7 +76,7 @@ def pad_to_multiple(seqs, multiple, padding_value):
     max_len = np.max([len(s) for s in seqs])
     padded_len = calc_padded_len(max_len, multiple)
 
-    new_seqs = np.ones((len(seqs), padded_len)) * -1
+    new_seqs = np.ones((len(seqs), padded_len)) * padding_value
 
     for i, seq in enumerate(seqs):
         new_seqs[i, :len(seq)] = seq
