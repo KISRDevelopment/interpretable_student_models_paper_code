@@ -8,14 +8,20 @@ def main(input_dir, output_path):
     actual_params = np.load(actual_params)
     n_kcs = actual_params.shape[0]
 
-    ns_students = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+    ns_students = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
     col_labels = ['pI0', 'pL', 'pF', 'pG', 'pS']
 
     dfs = []
     for n_students in ns_students:
-        diffs_by_kc = get_torch_bkt_probs("%s/torch-bkt_perf_%d.params.npy.npz" % (input_dir, n_students), actual_params)
+        diffs_by_kc = get_torch_bkt_probs("%s/bkt_perf_%d.params.npy.npz" % (input_dir, n_students), actual_params)
         df = reshape_df(diffs_by_kc)
-        df['model'] = 'torch-bkt'
+        df['model'] = 'bkt'
+        df['n_students'] = n_students
+        dfs.append(df)
+
+        diffs_by_kc = get_torch_bkt_probs("%s/fbkt_perf_%d.params.npy.npz" % (input_dir, n_students), actual_params)
+        df = reshape_df(diffs_by_kc)
+        df['model'] = 'fbkt'
         df['n_students'] = n_students
         dfs.append(df)
 
@@ -51,10 +57,10 @@ def get_brute_force_bkt_probs(params_path, actual_params):
         diff = np.abs(np.array([1-r.pL0, r.pL0]) - actual_params[skill, 0])
         knowing_state = np.argmin(diff)
         if knowing_state == 1:
-            print("knowing state", 1)
+            #print("knowing state", 1)
             diffs_by_kc[r.skill, r.split, :] = np.abs(np.array([r.pL0, r.pT, r.pF, r.pG, r.pS]) - actual_params[skill,:])
         else:
-            print("knowing state", 0)
+            #print("knowing state", 0)
             diffs_by_kc[r.skill, r.split, :] = np.abs(np.array([1-r.pL0, r.pF, r.pT, 1-r.pS, 1-r.pG]) - actual_params[skill,:])
     return diffs_by_kc
 
