@@ -245,19 +245,11 @@ class BktModel(nn.Module):
         logits = self._logits(kc) # Bx5
         return self._model(corr, logits)
 
+    
     def get_params(self):
         
-        kc_logits = self._logits.weight
-        trans_logits = th.hstack((-kc_logits[:, [0]], # 1-pL
-                                kc_logits[:, [1]],  # pF
-                                kc_logits[:, [0]],  # pL
-                                -kc_logits[:, [1]])).reshape((-1, 2, 2)) # 1-pF (Latent KCs x 2 x 2)
-        obs_logits = th.hstack((-kc_logits[:, [2]], # 1-pG
-                                kc_logits[:, [2]],  # pG
-                                kc_logits[:, [3]],  # pS
-                                -kc_logits[:, [3]])).reshape((-1, 2, 2)) # 1-pS (Latent KCs x 2 x 2)
-        init_logits = th.hstack((-kc_logits[:, [4]], kc_logits[:, [4]])) # (Latent KCs x 2)
-
+        
+        trans_logits, obs_logits, init_logits = _get_logits(self._logits.weight)
 
         alpha = F.softmax(init_logits, dim=1) # n_chains x n_states
         obs = F.softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
@@ -265,6 +257,21 @@ class BktModel(nn.Module):
         
         return alpha, obs, t
     
+def _get_logits(kc_logits):
+    
+    trans_logits = th.hstack((  kc_logits[:, [0]]*0, # 1-pL
+                                kc_logits[:, [1]],  # pF
+                                kc_logits[:, [0]],  # pL
+                                kc_logits[:, [1]]*0)).reshape((-1, 2, 2)) # 1-pF (Latent KCs x 2 x 2)
+    obs_logits = th.hstack((kc_logits[:, [2]]*0, # 1-pG
+                            kc_logits[:, [2]],  # pG
+                            kc_logits[:, [3]],  # pS
+                            kc_logits[:, [3]]*0)).reshape((-1, 2, 2)) # 1-pS (Latent KCs x 2 x 2)
+    init_logits = th.hstack((kc_logits[:, [4]]*0, 
+                             kc_logits[:, [4]])) # (Latent KCs x 2)
+
+    return trans_logits, obs_logits, init_logits
+
 class FastBkt(jit.ScriptModule):
 
     def __init__(self, n, device):

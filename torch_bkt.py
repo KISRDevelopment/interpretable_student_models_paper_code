@@ -21,16 +21,23 @@ import sklearn.metrics
 
 class MultiHmmCell(jit.ScriptModule):
     
-    def __init__(self, n_states, n_outputs, n_chains):
+    def __init__(self, n_states, n_outputs, n_chains, trans_logits, obs_logits, init_logits):
         super(MultiHmmCell, self).__init__()
         
         self.n_states = n_states
         self.n_outputs = n_outputs
         
+        if trans_logits is None:
+            trans_logits = th.randn(n_chains, n_states, n_states)
+        if obs_logits is None:
+            obs_logits = th.randn(n_chains, n_states, n_outputs)
+        if init_logits is None:
+            init_logits = th.randn(n_chains, n_states)
+
         # [n_hidden,n_hidden] (Target,Source)
-        self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
-        self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
-        self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
+        self.trans_logits = nn.Parameter(trans_logits)
+        self.obs_logits = nn.Parameter(obs_logits)
+        self.init_logits = nn.Parameter(init_logits)
         
     @jit.script_method
     def forward(self, obs: Tensor, chain: Tensor) -> Tensor:
@@ -73,9 +80,9 @@ class MultiHmmCell(jit.ScriptModule):
         return outputs
 
 class BktModel(nn.Module):
-    def __init__(self, n_kcs):
+    def __init__(self, n_kcs, trans_logits=None, obs_logits=None, init_logits=None):
         super(BktModel, self).__init__()
-        self.hmm = MultiHmmCell(2, 2, n_kcs)
+        self.hmm = MultiHmmCell(2, 2, n_kcs, trans_logits, obs_logits, init_logits)
 
     def forward(self, corr, kc):
         return self.hmm(corr, kc)

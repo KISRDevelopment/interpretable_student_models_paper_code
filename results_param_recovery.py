@@ -76,7 +76,7 @@ def get_torch_bkt_probs(params_path, actual_params):
         probs = np.zeros(5)
         for f in range(n_folds):
             diff = np.abs(alpha[f, k, :] - actual_params[k, 0])
-            knowing_state = np.argmin(diff)
+            knowing_state = np.argmin(diff) 
             probs[0] = alpha[f, k, knowing_state]
 
             probs[1] = t[f, k, knowing_state, 1-knowing_state]

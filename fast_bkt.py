@@ -22,7 +22,7 @@ def main():
     probs = sigmoid(np.array([logit_pL, logit_pF, logit_pG, logit_pS, logit_pI0]))
     
     # test sequence
-    seqs = generate_seqs(100, 500, probs)
+    seqs = generate_seqs(500, 50, probs)
     
     # limit on time steps
     N = 10
