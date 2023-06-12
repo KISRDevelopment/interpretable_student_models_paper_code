@@ -49,7 +49,7 @@ def run(cfg, df, splits):
     lens = df.groupby('student')['problem'].count()
     print("Min, median, max sequence length: ", (np.min(lens), np.median(lens), np.max(lens)))
     
-    seqs = to_student_sequences(df)
+    seqs = utils.to_seqs(df)
     
 
     results = []
@@ -102,11 +102,6 @@ def run(cfg, df, splits):
 
 def train(cfg, train_seqs, valid_seqs):
     
-    #train_seqs = split_seqs_by_kc(train_seqs)
-
-    #valid_seqs = split_seqs_by_kc(valid_seqs)
-    #valid_seqs = sorted(valid_seqs, reverse=True, key=lambda s: len(s[1]))
-
     # tic = time.perf_counter()
     model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], cfg['device']).to(cfg['device'])
     # toc = time.perf_counter()
@@ -129,19 +124,15 @@ def train(cfg, train_seqs, valid_seqs):
         # tic = time.perf_counter()
         for offset in range(0, n_seqs, cfg['n_train_batch_seqs']):
             end = offset + cfg['n_train_batch_seqs']
-            batch_seqs, problem_seqs = split_seqs_by_kc(train_seqs[offset:end])
+            batch_seqs = train_seqs[offset:end]
             
+            # OxM
+            ytrue = pad_sequence([th.tensor(s['correct']) for s in batch_seqs], batch_first=True, padding_value=0).float().to(cfg['device'])
+            mask = pad_sequence([th.tensor(s['correct']) for s in batch_seqs],batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
-            # prepare model input
-            batch_obs_seqs = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=0).float().to(cfg['device'])
-            batch_kc = th.tensor([kc for kc, _ in batch_seqs]).long().to(cfg['device'])
-            batch_problem_seqs = pad_to_multiple(problem_seqs, multiple=cfg['fastbkt_n'], padding_value=0).long().to(cfg['device'])
-            
-            mask = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=-1).to(cfg['device']) > -1
+            output = model(batch_seqs) # OxMx2
 
-            output = model(batch_obs_seqs, batch_kc, batch_problem_seqs)
-
-            train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten()
+            train_loss = -(ytrue * output[:, :, 1] + (1-ytrue) * output[:, :, 0]).flatten()
             mask_ix = mask.flatten()
 
             train_loss = train_loss[mask_ix].mean()
@@ -154,7 +145,7 @@ def train(cfg, train_seqs, valid_seqs):
         # toc = time.perf_counter()
         #print("Train time: %f" % (toc - tic))
         mean_train_loss = np.mean(losses)
-       
+        
         #
         # Validation
         #
@@ -188,7 +179,7 @@ def train(cfg, train_seqs, valid_seqs):
         
 def predict(cfg, model, seqs):
 
-    seqs = sorted(seqs, reverse=True, key=lambda s: len(s))
+    seqs = sorted(seqs, reverse=True, key=lambda s: len(s['kc']))
     
     model.eval()
     with th.no_grad():
@@ -196,17 +187,16 @@ def predict(cfg, model, seqs):
         all_ytrue = []
         for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
             end = offset + cfg['n_test_batch_seqs']
-            batch_seqs, problem_seqs = split_seqs_by_kc(seqs[offset:end])
-
-            batch_obs_seqs = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=0).float().to(cfg['device'])
-            batch_kc = th.tensor([kc for kc, _ in batch_seqs]).long().to(cfg['device'])
-            batch_problem_seqs = pad_to_multiple(problem_seqs, multiple=cfg['fastbkt_n'], padding_value=0).long().to(cfg['device'])
-            mask = pad_to_multiple([seq for kc, seq in batch_seqs], multiple=cfg['fastbkt_n'], padding_value=-1).to(cfg['device']) > -1
-
-            output = model(batch_obs_seqs, batch_kc, batch_problem_seqs)
-                
+            batch_seqs = seqs[offset:end]
+            
+            # OxM
+            ytrue = pad_sequence([th.tensor(s['correct']) for s in batch_seqs], batch_first=True, padding_value=0).float().to(cfg['device'])
+            mask = pad_sequence([th.tensor(s['correct']) for s in batch_seqs],batch_first=True, padding_value=-1).to(cfg['device']) > -1
+            
+            output = model(batch_seqs) # OxMx2
+            
             ypred = output[:, :, 1].flatten()
-            ytrue = batch_obs_seqs.flatten()
+            ytrue = ytrue.flatten()
             mask_ix = mask.flatten()
                 
             ypred = ypred[mask_ix].cpu().numpy()
@@ -257,8 +247,57 @@ class BktModel(nn.Module):
 
         self.block_size = 4 * fastbkt_n
 
+        self.fastbkt_n = fastbkt_n
 
-    def forward(self, corr, kc, problem):
+    def forward(self, seqs):
+        orig_batch_size = len(seqs)
+
+        # prepare the batch
+        subseqs, max_len = utils.prepare_batch(seqs)
+
+        #
+        # pad all subsequences to identical lengths
+        #
+
+        # BxT
+        padded_trial_id = pad_to_multiple([s['trial_id'] for s in subseqs], multiple=self.fastbkt_n, padding_value=-1).long().to(self._device)
+        padded_problem = pad_to_multiple([s['problem'] for s in subseqs], multiple=self.fastbkt_n, padding_value=0).long().to(self._device)
+        padded_correct = pad_to_multiple([s['correct'] for s in subseqs], multiple=self.fastbkt_n, padding_value=0).float().to(self._device)
+        
+        # B
+        kc = th.tensor([s['kc'] for s in subseqs]).long().to(self._device)
+
+        #
+        # run the model
+        #
+        logprob_pred = self.forward_(padded_correct, kc, padded_problem) # BxTx2
+
+        #
+        # put everything back together
+        #
+
+        # allocate storage for final result which will be in terms of the original
+        # student sequences
+        logprob_pred0 = th.zeros(orig_batch_size*max_len).to(self._device)
+        logprob_pred1 = th.zeros_like(logprob_pred0)
+
+        # flatten the trial ids and use them to set the appropriate elements in the final result
+        flattened_trial_id = padded_trial_id.flatten() # B*T
+        mask_ix = flattened_trial_id > -1
+        valid_trial_id = flattened_trial_id[mask_ix]
+        logprob_pred0[valid_trial_id] = logprob_pred[:,:,0].flatten()[mask_ix]
+        logprob_pred1[valid_trial_id] = logprob_pred[:,:,1].flatten()[mask_ix]
+        
+        # rearrange final result into the right shape
+        logprob_pred0 = th.reshape(logprob_pred0, (orig_batch_size, max_len)) # OxM
+        logprob_pred1 = th.reshape(logprob_pred1, (orig_batch_size, max_len)) # OxM
+        result = th.concat((logprob_pred0[:,:,None], logprob_pred1[:,:,None]), dim=2) # OxMx2
+
+        return result
+
+
+
+    def forward_(self, corr, kc, problem):
         """
             Input:
                 corr: trial correctness     BxT
