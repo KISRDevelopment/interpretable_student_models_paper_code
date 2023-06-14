@@ -103,7 +103,7 @@ def run(cfg, df, splits):
 def train(cfg, train_seqs, valid_seqs):
     
     # tic = time.perf_counter()
-    model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], cfg['device']).to(cfg['device'])
+    model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], [0.0], cfg['device']).to(cfg['device'])
     # toc = time.perf_counter()
     #print("Model creation: %f" % (toc - tic))
 
@@ -232,13 +232,13 @@ def pad_to_multiple(seqs, multiple, padding_value):
 
 class BktModel(nn.Module):
 
-    def __init__(self, n_kcs, n_problems, fastbkt_n, device):
+    def __init__(self, n_kcs, n_problems, fastbkt_n, ability_levels, device):
         super(BktModel, self).__init__()
         
         self._dynamics_logits = nn.Embedding(n_kcs, 3) # pL, pF, pI0
 
         # problem logits are initialized to zero to help with generalization
-        # by relying only on kc logits
+        # by relying only on kc logits pG, pS
         self.obs_logits_problem = nn.Parameter(th.zeros(n_problems, 2))
         self.obs_logits_kc = nn.Parameter(th.randn(n_kcs, 2))
         
@@ -249,11 +249,16 @@ class BktModel(nn.Module):
 
         self.fastbkt_n = fastbkt_n
 
+        self.ability_levels = th.tensor(ability_levels).to(device) # A
+        self.ability_index = th.arange(len(ability_levels)).long().to(device) # A 
+
     def forward(self, seqs):
         orig_batch_size = len(seqs)
+        n_ability_levels = self.ability_levels.shape[0]
 
         # prepare the batch
         subseqs, max_len = utils.prepare_batch(seqs)
+        n_new_bach_size = len(subseqs)
 
         #
         # pad all subsequences to identical lengths
@@ -268,9 +273,23 @@ class BktModel(nn.Module):
         kc = th.tensor([s['kc'] for s in subseqs]).long().to(self._device)
 
         #
+        # second stage: for each subsequence, handle all ability levels
+        # the new batch size B' = B * number of ability levels
+        #
+        #   Sequence    1       2       3       ... 1       2       3   ...
+        #   Ability     0       0       0       ... 1       1       1   ...
+        #
+        ability_index = th.repeat_interleave(self.ability_index, kc.shape[0]) # B'
+        ability_level = th.repeat_interleave(self.ability_levels, kc.shape[0]) # B'
+        padded_trial_id = th.tile(padded_trial_id, (n_ability_levels, 1)) # B'xT
+        padded_problem = th.tile(padded_problem, (n_ability_levels, 1)) # B'xT
+        padded_correct = th.tile(padded_correct, (n_ability_levels, 1)) # B'xT
+        kc = th.tile(kc, (n_ability_levels,)) # B'
+
+        #
         # run the model
         #
-        logprob_pred = self.forward_(padded_correct, kc, padded_problem) # BxTx2
+        logprob_pred = self.forward_(padded_correct, kc, padded_problem, ability_level) # B'xTx2
 
         #
         # put everything back together
@@ -278,32 +297,38 @@ class BktModel(nn.Module):
 
         # allocate storage for final result which will be in terms of the original
         # student sequences
-        logprob_pred0 = th.zeros(orig_batch_size*max_len).to(self._device)
+        logprob_pred0 = th.zeros(orig_batch_size*n_ability_levels*max_len).to(self._device)
         logprob_pred1 = th.zeros_like(logprob_pred0)
 
-        # flatten the trial ids and use them to set the appropriate elements in the final result
-        flattened_trial_id = padded_trial_id.flatten() # B*T
-        mask_ix = flattened_trial_id > -1
-        valid_trial_id = flattened_trial_id[mask_ix]
+        # flatten the trial ids and get the actual non-masked trials
+        flattened_trial_id = padded_trial_id.flatten() # B'*T
+        mask_ix = flattened_trial_id > -1 
+        valid_trial_id = flattened_trial_id[mask_ix] # B'*Treal
+
+        # add the offset corresponding to abilities
+        valid_trial_id = th.reshape(valid_trial_id, (kc.shape[0], -1)) # B'xTreal
+        valid_trial_id = valid_trial_id + ability_index[:,None] * n_new_bach_size * max_len
+        valid_trial_id = valid_trial_id.flatten() # B'*Treal
         logprob_pred0[valid_trial_id] = logprob_pred[:,:,0].flatten()[mask_ix]
         logprob_pred1[valid_trial_id] = logprob_pred[:,:,1].flatten()[mask_ix]
         
         # rearrange final result into the right shape
-        logprob_pred0 = th.reshape(logprob_pred0, (orig_batch_size, max_len)) # OxM
-        logprob_pred1 = th.reshape(logprob_pred1, (orig_batch_size, max_len)) # OxM
-        result = th.concat((logprob_pred0[:,:,None], logprob_pred1[:,:,None]), dim=2) # OxMx2
-
-        return result
+        logprob_pred0 = th.reshape(logprob_pred0, (orig_batch_size, n_ability_levels, max_len)) # OxAxM
+        logprob_pred1 = th.reshape(logprob_pred1, (orig_batch_size, n_ability_levels, max_len)) # OxAxM
+        result = th.concat((logprob_pred0[:,:,:,None], logprob_pred1[:,:,:,None]), dim=3) # OxAxMx2
 
 
+        return result.sum(1)
 
-    def forward_(self, corr, kc, problem):
+
+
+    def forward_(self, corr, kc, problem, ability_level):
         """
             Input:
                 corr: trial correctness     BxT
                 kc: kc membership (long)    B
                 problem: problem ids (long) BxT
-
+                ability_level: (float)      B
             Returns:
                 logprob_pred: log probability of correctness BxTx2
         """
@@ -312,6 +337,10 @@ class BktModel(nn.Module):
         obs_logits_kc = self.obs_logits_kc[kc, :] # Bx2
         obs_logits_problem = self.obs_logits_problem[problem, :] # BxTx2
         obs_logits = obs_logits_kc[:,None,:] + obs_logits_problem # BxTx2
+
+        # adjust observation probabilities to account for student ability
+        obs_logits[:, :, 0] = ability_level[:, None] + obs_logits[:, :, 0] # greater ability -> greater prob of guessing
+        obs_logits[:, :, 1] = obs_logits[:, :, 1] - ability_level[:, None] # greater ability -> smaller prob of slipping
 
         logprob_pred, logprob_h = self._model(corr, dynamics_logits, obs_logits)
         return logprob_pred
