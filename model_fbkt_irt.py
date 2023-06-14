@@ -103,7 +103,7 @@ def run(cfg, df, splits):
 def train(cfg, train_seqs, valid_seqs):
     
     # tic = time.perf_counter()
-    model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], [0.0], cfg['device']).to(cfg['device'])
+    model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], np.linspace(-3, 3, 11), cfg['device']).to(cfg['device'])
     # toc = time.perf_counter()
     #print("Model creation: %f" % (toc - tic))
 
@@ -130,7 +130,7 @@ def train(cfg, train_seqs, valid_seqs):
             ytrue = pad_sequence([th.tensor(s['correct']) for s in batch_seqs], batch_first=True, padding_value=0).float().to(cfg['device'])
             mask = pad_sequence([th.tensor(s['correct']) for s in batch_seqs],batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
-            output = model(batch_seqs) # OxMx2
+            output = model(batch_seqs, ytrue) # OxMx2
 
             train_loss = -(ytrue * output[:, :, 1] + (1-ytrue) * output[:, :, 0]).flatten()
             mask_ix = mask.flatten()
@@ -193,7 +193,7 @@ def predict(cfg, model, seqs):
             ytrue = pad_sequence([th.tensor(s['correct']) for s in batch_seqs], batch_first=True, padding_value=0).float().to(cfg['device'])
             mask = pad_sequence([th.tensor(s['correct']) for s in batch_seqs],batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
-            output = model(batch_seqs) # OxMx2
+            output = model(batch_seqs, ytrue) # OxMx2
             
             ypred = output[:, :, 1].flatten()
             ytrue = ytrue.flatten()
@@ -252,7 +252,7 @@ class BktModel(nn.Module):
         self.ability_levels = th.tensor(ability_levels).to(device) # A
         self.ability_index = th.arange(len(ability_levels)).long().to(device) # A 
 
-    def forward(self, seqs):
+    def forward(self, seqs, ytrue):
         orig_batch_size = len(seqs)
         n_ability_levels = self.ability_levels.shape[0]
 
@@ -300,25 +300,23 @@ class BktModel(nn.Module):
         logprob_pred0 = th.zeros(orig_batch_size*n_ability_levels*max_len).to(self._device)
         logprob_pred1 = th.zeros_like(logprob_pred0)
 
-        # flatten the trial ids and get the actual non-masked trials
-        flattened_trial_id = padded_trial_id.flatten() # B'*T
-        mask_ix = flattened_trial_id > -1 
-        valid_trial_id = flattened_trial_id[mask_ix] # B'*Treal
-
-        # add the offset corresponding to abilities
-        valid_trial_id = th.reshape(valid_trial_id, (kc.shape[0], -1)) # B'xTreal
-        valid_trial_id = valid_trial_id + ability_index[:,None] * n_new_bach_size * max_len
-        valid_trial_id = valid_trial_id.flatten() # B'*Treal
+        # B'*T
+        adj_trial_id = padded_trial_id + ability_index[:, None] * orig_batch_size * max_len
+        adj_trial_id[padded_trial_id == -1] = -1
+        adj_trial_id = adj_trial_id.flatten() # B'*T
+        mask_ix = adj_trial_id > -1
+        valid_trial_id = adj_trial_id[mask_ix]
+        
         logprob_pred0[valid_trial_id] = logprob_pred[:,:,0].flatten()[mask_ix]
         logprob_pred1[valid_trial_id] = logprob_pred[:,:,1].flatten()[mask_ix]
         
         # rearrange final result into the right shape
-        logprob_pred0 = th.reshape(logprob_pred0, (orig_batch_size, n_ability_levels, max_len)) # OxAxM
-        logprob_pred1 = th.reshape(logprob_pred1, (orig_batch_size, n_ability_levels, max_len)) # OxAxM
+        logprob_pred0 = th.reshape(logprob_pred0, (n_ability_levels, orig_batch_size, max_len)) # OxAxM
+        logprob_pred1 = th.reshape(logprob_pred1, (n_ability_levels, orig_batch_size, max_len)) # OxAxM
         result = th.concat((logprob_pred0[:,:,:,None], logprob_pred1[:,:,:,None]), dim=3) # OxAxMx2
+        result = th.permute(result, (1, 0, 2, 3))
 
-
-        return result.sum(1)
+        return collapse_over_abilities(result, ytrue)
 
 
 
@@ -365,6 +363,33 @@ class BktModel(nn.Module):
         
         # return final_output
     
+def collapse_over_abilities(logpred, ytrue):
+    """
+        Input:
+            logpred: BxAxTx2 representing p(y_t|y_1..t-1,alpha)
+            ytrue: BxT
+        Returns:
+            logpreds: BxTx2
+    """
+
+    # logprobability of observations BxAxT
+    logprob = ytrue[:,None,:] * logpred[:,:,:,1] + (1-ytrue[:,None,:]) * logpred[:,:,:,0]
+        
+    # calculate unnormed posterior over alphas
+    # this represents p(alpha,y_1...yt-1)
+    # p(alpha) ~ Uniform (i.e., for t=1)
+    alpha_posterior = logprob.cumsum(2).roll(dims=2, shifts=1) # BxAxT
+    alpha_posterior[:, :, 0] = 0.0 # uniform prior
+
+    # compute unnormed predictions
+    unnormed_preds = logpred + alpha_posterior[:,:,:,None] # BxAxTx2
+    unnormed_preds = th.logsumexp(unnormed_preds, dim=1) # BxTx2
+
+    # normalize BxTx2
+    normed_preds = unnormed_preds - th.logsumexp(unnormed_preds, dim=2)[:,:,None]
+
+    return normed_preds
+
 class FastBkt(jit.ScriptModule):
 
     def __init__(self, n, device):
