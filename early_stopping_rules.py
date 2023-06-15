@@ -11,6 +11,8 @@ def main():
 
         print("Value = %0.2f, Stop? %s %s" % (e, r[0], '***' if r[1] else ''))
 
+    exit()
+    
     print("Linear Rule")
     rule = LinearRule(5, 0.01, False)
 
@@ -64,15 +66,12 @@ class PatienceRule():
         self._best_value = None 
 
     def log(self, value):
-
-        if self._best_value is None:
-            self._best_value = value 
-            self._waited = 0
-            return (False, True) # do not stop, new best
-        
         c = -1 if self.minimize else 1
 
-        perc_improvement = c * (value - self._best_value) / self._best_value
+        if self._best_value is None:
+            perc_improvement = np.inf 
+        else:
+            perc_improvement = c * (value - self._best_value) / self._best_value
         
         new_best = perc_improvement > 0
         if new_best:
