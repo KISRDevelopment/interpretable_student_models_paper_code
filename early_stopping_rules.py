@@ -7,9 +7,52 @@ def main():
     seq = [1, 2, 3, 4, 5, 0.96, 7]
 
     for e in seq:
-        print("Value = %d, Stop? %s %s" % (e, rule.log(e), '***' if rule._waited == 0 else ''))
+        r =rule.log(e)
 
+        print("Value = %0.2f, Stop? %s %s" % (e, r[0], '***' if r[1] else ''))
+
+    print("Linear Rule")
+    rule = LinearRule(5, 0.01, False)
+
+    seq = [0.5, 0.51, 0.52, 0.53, 0.56, 0.56, 0.54, 0.54]
+
+    for e in seq:
+        r = rule.log(e)
+
+        print("Value = %0.2f, Stop? %s %s" % (e, r[0], '***' if r[1] else ''))
+
+class LinearRule():
+    """
+        Stop training if improvement over last N trials is less than X 
+    """
+
+    def __init__(self, n, thres, minimize):
+        self.n = n 
+        self.thres = thres 
+        self.minimize = minimize
+        self._vals = []
+        self._best_value = None 
     
+    def log(self, value):
+
+        self._vals.append(value)
+
+        # is this new best?
+        new_best = self._best_value is None or (value < self._best_value if self.minimize else value > self._best_value)
+        if new_best:
+            self._best_value = value 
+        
+        # don't stop if not enough trials
+        if len(self._vals) < self.n:
+            return (False, new_best)
+        
+        last_trials = self._vals[-self.n:]
+
+        # fit a line
+        z = np.polyfit(np.arange(self.n), last_trials, 1)
+        slope = np.abs(z[0])
+        print(slope)
+        return (slope < self.thres, new_best)
 
 class PatienceRule():
 

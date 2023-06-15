@@ -103,7 +103,7 @@ def run(cfg, df, splits):
 def train(cfg, train_seqs, valid_seqs):
     
     # tic = time.perf_counter()
-    model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], np.linspace(-3, 3, 11), cfg['device']).to(cfg['device'])
+    model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], cfg['ability_levels'], cfg['device']).to(cfg['device'])
     # toc = time.perf_counter()
     #print("Model creation: %f" % (toc - tic))
 
