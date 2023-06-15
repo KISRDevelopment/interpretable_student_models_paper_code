@@ -32,6 +32,7 @@ class FastBkt(jit.ScriptModule):
         self._pred_ind = th.tensor(pred_ind).long().to(device)
         self._device = device 
 
+    @jit.script_method
     def forward(self, corr: Tensor, dynamics_logits: Tensor, obs_logits: Tensor) -> Tensor:
         
         # initial and state transition dynamics (B)
@@ -50,10 +51,11 @@ class FastBkt(jit.ScriptModule):
             (1-self._trajectories[None, :, [0]]) * trans_logprobs[:,None,[4]] # Bx2**Nx1
         
         # Bx2**Nx1
-        logprob_h = trans_logprobs[:,self._trans_ind].sum(2, keepdims=True) + initial_logprobs
+        logprob_h = trans_logprobs[:,self._trans_ind].sum(2)[:,:,None] + initial_logprobs
         
-        return self.forward_(corr, dynamics_logits, obs_logits, logprob_h)[0]
+        return self.forward_(corr, dynamics_logits, obs_logits, logprob_h)
 
+    @jit.script_method
     def forward_(self, corr: Tensor, dynamics_logits: Tensor, obs_logits: Tensor, logprob_h: Tensor) -> Tensor:
         """
             Input: 
@@ -130,14 +132,14 @@ class FastBkt(jit.ScriptModule):
             seq_loglik = seq_loglik_given_h + logprob_h[:,:,0] # Bx2**N
             next_h_one_logprob = F.logsigmoid(trans_logits[:, self._pred_ind]) + seq_loglik # Bx2**N
             next_h_zero_logprob = F.logsigmoid(-trans_logits[:, self._pred_ind]) + seq_loglik  # Bx2**N
-            next_h_one_logprob = th.logsumexp(next_h_one_logprob, dim=1, keepdims=True) # Bx1
-            next_h_zero_logprob = th.logsumexp(next_h_zero_logprob, dim=1, keepdims=True) # Bx1
+            next_h_one_logprob = th.logsumexp(next_h_one_logprob, dim=1)[:,None] # Bx1
+            next_h_zero_logprob = th.logsumexp(next_h_zero_logprob, dim=1)[:,None] # Bx1
             
             # 1x2**N * Bx1 = Bx2**N
             initial_logprobs = self._trajectories[None,:,0] * next_h_one_logprob + (1-self._trajectories[None,:,0]) * next_h_zero_logprob
             
             # Bx2**Nx1 + Bx2**Nx1 = Bx2**Nx1
-            logprob_h = trans_logprobs[:,self._trans_ind].sum(2, keepdims=True) + initial_logprobs[:,:,None]
+            logprob_h = trans_logprobs[:,self._trans_ind].sum(2)[:,:,None] + initial_logprobs[:,:,None]
 
                 
         # BxT
@@ -148,10 +150,10 @@ class FastBkt(jit.ScriptModule):
         preds = th.concat((pred_incorrects[:,:,None], pred_corrects[:,:,None]), dim=2)
         
         # BxTx2 - BxTx1
-        logprob_next = preds - th.logsumexp(preds, dim=2, keepdims=True)
+        logprob_next = preds - th.logsumexp(preds, dim=2)[:,:,None]
 
         # BxTx2
-        return logprob_next, logprob_h
+        return logprob_next
 
 def make_trajectories(n):
     """
