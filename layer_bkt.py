@@ -24,7 +24,7 @@ class RnnBkt(jit.ScriptModule):
         """
         
         trans_logits, obs_logits, init_logits = get_logits(dynamics_logits, obs_logits)
-
+        
         return self.forward_(corr, trans_logits, obs_logits, init_logits)
     
     @jit.script_method
@@ -37,7 +37,7 @@ class RnnBkt(jit.ScriptModule):
             Input:
                 obs: [n_batch, t]
                 trans_logits: [n_batch, n_states, n_states] (Target, Source)
-                obs_logits: [n_batch, n_states, n_outputs]
+                obs_logits: [n_batch, t, n_states, n_outputs]
                 init_logits: [n_batch, n_states]
             output:
                 logits: [n_batch, t, n_outputs]
@@ -49,20 +49,20 @@ class RnnBkt(jit.ScriptModule):
         batch_idx = th.arange(n_batch)
 
         log_alpha = F.log_softmax(init_logits, dim=1) # n_batch x n_states
-        log_obs = F.log_softmax(obs_logits, dim=2) # n_batch x n_states x n_obs
+        log_obs = F.log_softmax(obs_logits, dim=3) # n_batch x t x n_states x n_obs
         log_t = F.log_softmax(trans_logits, dim=1) # n_batch x n_states x n_states
         
         for i in range(0, obs.shape[1]):
             
             # predict
             # B X S X O + B X S X 1
-            log_py = th.logsumexp(log_obs + log_alpha[:, :, None], dim=1)  # B x O
+            log_py = th.logsumexp(log_obs[:,i,:,:] + log_alpha[:, :, None], dim=1)  # B x O
             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
             outputs += [log_py]
 
             # update
             curr_y = obs[:,i]
-            log_py = log_obs[batch_idx, :, curr_y] # B x S
+            log_py = log_obs[batch_idx, i, :, curr_y] # B x S
             
             # B x 1 X S + B x 1 x S + B x S x S
             log_alpha = th.logsumexp(log_py[:,None,:] + log_alpha[:,None,:] + log_t, dim=2)
@@ -79,10 +79,10 @@ def get_logits(dynamics_logits, obs_logits):
                                 dynamics_logits[:, [1]],  # pF
                                 dynamics_logits[:, [0]],  # pL
                                 dynamics_logits[:, [1]]*0)).reshape((-1, 2, 2)) # 1-pF (Latent KCs x 2 x 2)
-    obs_logits = th.hstack((obs_logits[:, [0]]*0, # 1-pG
-                            obs_logits[:, [0]],  # pG
-                            obs_logits[:, [1]],  # pS
-                            obs_logits[:, [1]]*0)).reshape((-1, 2, 2)) # 1-pS (Latent KCs x 2 x 2)
+    obs_logits = th.concat((obs_logits[:, :, [0]]*0, # 1-pG
+                            obs_logits[:, :, [0]],  # pG
+                            obs_logits[:, :, [1]],  # pS
+                            obs_logits[:, :, [1]]*0), dim=2).reshape((obs_logits.shape[0], -1, 2, 2)) # 1-pS (Latent KCs x T x 2 x 2)
     init_logits = th.hstack((dynamics_logits[:, [2]]*0, 
                              dynamics_logits[:, [2]])) # (Latent KCs x 2)
 
@@ -117,9 +117,13 @@ def main():
     #
     # BKT probabilities
     #
-    dynamics_logits = th.tensor([[logit_pL, logit_pF, logit_pI0]])
-    obs_logits = th.tensor([[logit_pG, logit_pS]])
+
     corr = th.tensor([obs])
+    
+    dynamics_logits = th.tensor([[logit_pL, logit_pF, logit_pI0]])
+    
+    obs_logits = th.tensor([[logit_pG, logit_pS]]) # Bx2
+    obs_logits = th.tile(obs_logits, (1, corr.shape[1], 1)) # BxTx2
     
     model = RnnBkt()
     logpred = model(corr, dynamics_logits, obs_logits)

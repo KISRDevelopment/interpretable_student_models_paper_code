@@ -52,7 +52,7 @@ class FastBkt(jit.ScriptModule):
         # Bx2**Nx1
         logprob_h = trans_logprobs[:,self._trans_ind].sum(2, keepdims=True) + initial_logprobs
         
-        return self.forward_(corr, dynamics_logits, obs_logits, logprob_h)
+        return self.forward_(corr, dynamics_logits, obs_logits, logprob_h)[0]
 
     def forward_(self, corr: Tensor, dynamics_logits: Tensor, obs_logits: Tensor, logprob_h: Tensor) -> Tensor:
         """
@@ -186,3 +186,44 @@ def make_predictive_indices(trajectories):
     target_state = np.ones(trajectories.shape[0])
     indices = trajectories[:,-1] * 2 + target_state
     return indices
+
+def main():
+
+    """ quick test of implementation against reference """
+    
+    # BKT parameters probabilities
+    logit_pI0 = 0.3
+    logit_pG = -0.4
+    logit_pS = 1.0
+    logit_pL = -1
+    logit_pF = -2 
+
+    # sequence
+    obs = [0, 1, 1, 1, 0, 1, 0, 1, 1, 0]
+    seq = np.zeros((len(obs), 2))
+    seq[np.arange(seq.shape[0]), obs] = 1
+    
+    sigmoid = lambda x: 1/(1+np.exp(-x))
+
+    #
+    # reference probabilities
+    #
+    import model_brute_force_bkt 
+    probs = sigmoid(np.array([logit_pL, logit_pF, logit_pG, logit_pS, logit_pI0]))
+    ref_bkt_prob_corr = model_brute_force_bkt.forward_bkt(seq, *probs)
+    print(ref_bkt_prob_corr)
+
+    #
+    # BKT probabilities
+    #
+    dynamics_logits = th.tensor([[logit_pL, logit_pF, logit_pI0]])
+    obs_logits = th.tensor([[logit_pG, logit_pS]])
+    corr = th.tensor([obs])
+    obs_logits = th.tile(obs_logits, (1, corr.shape[1], 1)) # BxTx2
+    
+    model = FastBkt(10, 'cpu:0')
+    logpred = model(corr, dynamics_logits, obs_logits)
+    print(logpred.exp()[0, :, 1].numpy())
+
+if __name__ == "__main__":
+    main()
