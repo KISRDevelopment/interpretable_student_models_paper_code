@@ -1,5 +1,5 @@
 {
-    "fastbkt_n" : 5,
+    "fastbkt_n" : 2,
     "learning_rate" : 0.5, 
     "epochs" : 100, 
     "patience" : 10,
