@@ -9,5 +9,6 @@
     "es_patience" : 10,
     "es_thres" : 0.01,
     "full_epochs" : false,
-    "ability_levels" : [-3.0, -2.5, -2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+    "ability_levels" : [0.0],
+    "problem_effects" : false
 }

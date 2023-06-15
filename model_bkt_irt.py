@@ -37,7 +37,9 @@ def main():
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)
-    
+
+    if not cfg['problem_effects']:
+        df['problem'] = 0
     cfg['n_kcs'] = np.max(df['skill']) + 1
     cfg['n_problems'] = np.max(df['problem']) + 1
     cfg['device'] = 'cuda:0'
