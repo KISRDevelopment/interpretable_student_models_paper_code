@@ -131,11 +131,15 @@ def train(cfg, train_seqs, valid_seqs):
             batch_seqs = train_seqs[offset:end]
             
             # OxM
-            ytrue = pad_sequence([th.tensor(s['correct']) for s in batch_seqs], batch_first=True, padding_value=0).float().to(cfg['device'])
-            mask = pad_sequence([th.tensor(s['correct']) for s in batch_seqs],batch_first=True, padding_value=-1).to(cfg['device']) > -1
+            corr_seqs = [th.tensor(s['correct']) for s in batch_seqs]
+            ytrue = pad_sequence(corr_seqs, batch_first=True, padding_value=0).float().to(cfg['device'])
+            mask = pad_sequence(corr_seqs, batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
+            #tic = time.perf_counter()
             output = model(batch_seqs, ytrue) # OxMx2
-
+            #toc = time.perf_counter()
+            # print("Model call: %f secs" % (toc - tic))
+            
             train_loss = -(ytrue * output[:, :, 1] + (1-ytrue) * output[:, :, 0]).flatten()
             mask_ix = mask.flatten()
 
@@ -234,7 +238,7 @@ def split_seqs_by_kc(seqs):
 class BktModel(nn.Module):
 
     def __init__(self, cfg):
-        super(BktModel, self).__init__()
+        super().__init__()
 
         #
         # BKT Parameters
@@ -261,9 +265,12 @@ class BktModel(nn.Module):
         n_ability_levels = self.ability_levels.shape[0]
 
         # prepare the batch
+        #tic = time.perf_counter()
         subseqs, max_len = utils.prepare_batch(seqs)
         n_new_bach_size = len(subseqs)
-
+        #toc = time.perf_counter()
+        #print("Batch prepared: %f secs" % (toc - tic))
+        
         #
         # pad all subsequences to identical lengths
         #
@@ -294,7 +301,7 @@ class BktModel(nn.Module):
         # run the model
         #
         logprob_pred = self.forward_(padded_correct, kc, padded_problem, ability_level) # B'xTx2
-
+        
         #
         # put everything back together
         #
