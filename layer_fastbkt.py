@@ -221,9 +221,24 @@ def main():
     corr = th.tensor([obs])
     obs_logits = th.tile(obs_logits, (1, corr.shape[1], 1)) # BxTx2
     
-    model = FastBkt(10, 'cpu:0')
+    model = FastBkt(5, 'cpu:0')
     logpred = model(corr, dynamics_logits, obs_logits)
     print(logpred.exp()[0, :, 1].numpy())
 
+    #
+    # compare to RNN BKTwhen obs logits are individualized 
+    #
+    obs_logits = th.rand_like(obs_logits)
+
+    print("Individualized OBS Probs:")
+    print("Fast BKT:")
+    logpred = model(corr, dynamics_logits, obs_logits)
+    print(logpred.exp()[0, :, 1].numpy())
+    print("RNN BKT:")
+
+    import layer_bkt 
+    model = layer_bkt.RnnBkt()
+    logpred = model(corr, dynamics_logits, obs_logits)
+    print(logpred.exp()[0, :, 1].numpy())
 if __name__ == "__main__":
     main()
