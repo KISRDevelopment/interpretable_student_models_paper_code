@@ -24,6 +24,8 @@ import utils
 import sklearn.metrics
 
 import layer_fastbkt 
+import layer_bkt 
+import layer_seq_bayesian
 
 def main():
     cfg_path = sys.argv[1]
@@ -53,7 +55,6 @@ def run(cfg, df, splits):
     
     seqs = utils.to_seqs(df)
     
-
     results = []
     all_params = defaultdict(list)
 
@@ -105,14 +106,13 @@ def run(cfg, df, splits):
 def train(cfg, train_seqs, valid_seqs):
     
     # tic = time.perf_counter()
-    model = BktModel(cfg['n_kcs'], cfg['n_problems'], cfg['fastbkt_n'], cfg['ability_levels'], cfg['device']).to(cfg['device'])
+    model = BktModel(cfg).to(cfg['device'])
     # toc = time.perf_counter()
     #print("Model creation: %f" % (toc - tic))
 
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
     
     stopping_rule = early_stopping_rules.PatienceRule(cfg['es_patience'], cfg['es_thres'], minimize=False)
-
 
     n_seqs = len(train_seqs) if cfg['full_epochs'] else cfg['n_train_batch_seqs']
 
@@ -229,30 +229,30 @@ def split_seqs_by_kc(seqs):
             problem_seqs.append([e[0] for e in seq])
     return obs_seqs, problem_seqs
 
-def pad_to_multiple(seqs, multiple, padding_value):
-    return th.tensor(utils.pad_to_multiple(seqs, multiple, padding_value))
-
 class BktModel(nn.Module):
 
-    def __init__(self, n_kcs, n_problems, fastbkt_n, ability_levels, device):
+    def __init__(self, cfg):
         super(BktModel, self).__init__()
+
+        #
+        # BKT Parameters
+        #
+        self._dynamics_logits = nn.Embedding(cfg['n_kcs'], 3) # pL, pF, pI0
+        self.obs_logits_problem = nn.Parameter(th.zeros(cfg['n_problems'], 2))
+        self.obs_logits_kc = nn.Parameter(th.randn(cfg['n_kcs'], 2))
         
-        self._dynamics_logits = nn.Embedding(n_kcs, 3) # pL, pF, pI0
+        if cfg['bkt_module'] == 'fbkt':
+            bkt_module = layer_fastbkt.FastBkt(cfg['fastbkt_n'], cfg['device'])
+        elif cfg['bkt_module'] == 'bkt':
+            bkt_module = layer_bkt.RnnBkt()
+        else:
+            raise "Unknown BKT module"
+        self._bkt_module = bkt_module
 
-        # problem logits are initialized to zero to help with generalization
-        # by relying only on kc logits pG, pS
-        self.obs_logits_problem = nn.Parameter(th.zeros(n_problems, 2))
-        self.obs_logits_kc = nn.Parameter(th.randn(n_kcs, 2))
-        
-        self._model = layer_fastbkt.FastBkt(fastbkt_n, device)
-        self._device = device 
+        self._device = cfg['device'] 
 
-        self.block_size = 4 * fastbkt_n
-
-        self.fastbkt_n = fastbkt_n
-
-        self.ability_levels = th.tensor(ability_levels).to(device) # A
-        self.ability_index = th.arange(len(ability_levels)).long().to(device) # A 
+        self.ability_levels = th.tensor(cfg['ability_levels']).to(cfg['device']) # A
+        self.ability_index = th.arange(self.ability_levels.shape[0]).long().to(cfg['device']) # A 
 
     def forward(self, seqs, ytrue):
         orig_batch_size = len(seqs)
@@ -267,9 +267,9 @@ class BktModel(nn.Module):
         #
 
         # BxT
-        padded_trial_id = pad_to_multiple([s['trial_id'] for s in subseqs], multiple=self.fastbkt_n, padding_value=-1).long().to(self._device)
-        padded_problem = pad_to_multiple([s['problem'] for s in subseqs], multiple=self.fastbkt_n, padding_value=0).long().to(self._device)
-        padded_correct = pad_to_multiple([s['correct'] for s in subseqs], multiple=self.fastbkt_n, padding_value=0).float().to(self._device)
+        padded_trial_id = self._bkt_module.pad([s['trial_id'] for s in subseqs], padding_value=-1).long().to(self._device)
+        padded_problem = self._bkt_module.pad([s['problem'] for s in subseqs], padding_value=0).long().to(self._device)
+        padded_correct = self._bkt_module.pad([s['correct'] for s in subseqs], padding_value=0).long().to(self._device)
         
         # B
         kc = th.tensor([s['kc'] for s in subseqs]).long().to(self._device)
@@ -318,8 +318,9 @@ class BktModel(nn.Module):
         result = th.concat((logprob_pred0[:,:,:,None], logprob_pred1[:,:,:,None]), dim=3) # OxAxMx2
         result = th.permute(result, (1, 0, 2, 3))
 
-        return collapse_over_abilities(result, ytrue)
+        logpred, _ = layer_seq_bayesian.seq_bayesian(result, ytrue)
 
+        return logpred
 
 
     def forward_(self, corr, kc, problem, ability_level):
@@ -342,55 +343,9 @@ class BktModel(nn.Module):
         obs_logits[:, :, 0] = ability_level[:, None] + obs_logits[:, :, 0] # greater ability -> greater prob of guessing
         obs_logits[:, :, 1] = obs_logits[:, :, 1] - ability_level[:, None] # greater ability -> smaller prob of slipping
 
-        logprob_pred, logprob_h = self._model(corr, dynamics_logits, obs_logits)
+        logprob_pred = self._bkt_module(corr, dynamics_logits, obs_logits)
         return logprob_pred
-        # batching over sequence
-        # all_outputs = []
-        # for offset in range(0, corr.shape[1], self.block_size):
-        #     end = offset + self.block_size
-        #     corr_slice = corr[:, offset:end]
-        #     obs_logits_slice = obs_logits[:, offset:end]
 
-        #     end = offset + self.block_size
-        #     if offset == 0:
-        #         logprob_pred, logprob_h = self._model(corr_slice, dynamics_logits, obs_logits_slice)
-        #     else:
-                
-        #         logprob_h = logprob_h.detach()
-        #         logprob_pred, logprob_h = self._model.forward_(corr_slice, dynamics_logits, obs_logits_slice, logprob_h)
-
-        #     all_outputs.append(logprob_pred)
-
-        # final_output = th.concat(all_outputs, dim=1) # BxTx2
-        
-        # return final_output
-    
-def collapse_over_abilities(logpred, ytrue):
-    """
-        Input:
-            logpred: BxAxTx2 representing p(y_t|y_1..t-1,alpha)
-            ytrue: BxT
-        Returns:
-            logpreds: BxTx2
-    """
-
-    # logprobability of observations BxAxT
-    logprob = ytrue[:,None,:] * logpred[:,:,:,1] + (1-ytrue[:,None,:]) * logpred[:,:,:,0]
-        
-    # calculate unnormed posterior over alphas
-    # this represents p(alpha,y_1...yt-1)
-    # p(alpha) ~ Uniform (i.e., for t=1)
-    alpha_posterior = logprob.cumsum(2).roll(dims=2, shifts=1) # BxAxT
-    alpha_posterior[:, :, 0] = 0.0 # uniform prior
-
-    # compute unnormed predictions
-    unnormed_preds = logpred + alpha_posterior[:,:,:,None] # BxAxTx2
-    unnormed_preds = th.logsumexp(unnormed_preds, dim=1) # BxTx2
-
-    # normalize BxTx2
-    normed_preds = unnormed_preds - th.logsumexp(unnormed_preds, dim=2)[:,:,None]
-
-    return normed_preds
 
 
 if __name__ == "__main__":

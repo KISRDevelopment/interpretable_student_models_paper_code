@@ -7,11 +7,16 @@ import torch.jit as jit
 from torch import Tensor
 from typing import List
 
+from torch.nn.utils.rnn import pad_sequence
+
 class RnnBkt(jit.ScriptModule):
     
     def __init__(self):
         super().__init__()
 
+    def pad(self, seqs, padding_value):
+        return pad_sequence([th.tensor(s) for s in seqs], batch_first=True, padding_value=padding_value)
+     
     @jit.script_method
     def forward(self, corr: Tensor, dynamics_logits: Tensor, obs_logits: Tensor) -> Tensor:
         """

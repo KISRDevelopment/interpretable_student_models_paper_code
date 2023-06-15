@@ -7,6 +7,7 @@ import torch.jit as jit
 from torch import Tensor
 from typing import List
 import itertools
+import utils 
 
 class FastBkt(jit.ScriptModule):
 
@@ -32,6 +33,9 @@ class FastBkt(jit.ScriptModule):
         self._pred_ind = th.tensor(pred_ind).long().to(device)
         self._device = device 
 
+    def pad(self, seqs, padding_value):
+        return pad_to_multiple(seqs, multiple=self.n, padding_value=padding_value)
+    
     @jit.script_method
     def forward(self, corr: Tensor, dynamics_logits: Tensor, obs_logits: Tensor) -> Tensor:
         
@@ -188,6 +192,11 @@ def make_predictive_indices(trajectories):
     target_state = np.ones(trajectories.shape[0])
     indices = trajectories[:,-1] * 2 + target_state
     return indices
+
+
+def pad_to_multiple(seqs, multiple, padding_value):
+    return th.tensor(utils.pad_to_multiple(seqs, multiple, padding_value))
+
 
 def main():
 

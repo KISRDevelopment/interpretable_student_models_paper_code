@@ -1,5 +1,6 @@
 {
-    "fastbkt_n" : 2,
+    "bkt_module" : "fbkt",
+    "fastbkt_n" : 5,
     "learning_rate" : 0.5, 
     "epochs" : 100, 
     "patience" : 10,
