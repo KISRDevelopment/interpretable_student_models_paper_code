@@ -18,6 +18,7 @@ from scipy.stats import qmc
 import layer_multihmmcell
 import layer_kc_discovery
 import early_stopping_rules
+import loss_sequence 
 def main():
     import sys
 
@@ -124,7 +125,7 @@ def train(cfg, train_seqs, valid_seqs):
 
             batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
             batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
-            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
+            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
             logpred, corr = model.forward(batch_obs_seqs, batch_problem_seqs) # BxSxTx2
             
@@ -137,6 +138,10 @@ def train(cfg, train_seqs, valid_seqs):
             mask_ix = mask_ix.flatten()
             train_loss = train_loss[mask_ix].mean() 
 
+            mlogprobs = F.log_softmax(model.kc_discovery._logits, dim=1)
+            aux_loss = loss_sequence.nback_loss(batch_problem_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
+
+            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
