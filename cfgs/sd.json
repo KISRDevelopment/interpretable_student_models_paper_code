@@ -1,0 +1,16 @@
+{
+    "n_kcs" : 20,
+    "learning_rate" : 0.1, 
+    "epochs" : 100, 
+    "patience" : 10,
+    "n_train_batch_seqs" : 500,
+    "n_test_batch_seqs" : 1000,
+    "n_train_samples" : 20,
+    "n_test_samples" : 100,
+    "hard_train_samples" : false,
+    "tau" : 0.5,
+    "es_patience" : 10,
+    "es_thres" : 0.01,
+    "full_epochs" : false,
+    "ability_levels" : [0.0]
+}
