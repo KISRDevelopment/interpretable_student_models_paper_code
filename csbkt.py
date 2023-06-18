@@ -181,7 +181,7 @@ def get_effective_assignment(membership_logits):
 class CsbktModel(nn.Module):
     def __init__(self, cfg):
         """
-            n_skills: # of latent skills (max around 10-12)
+            n_skills: # of latent skills (max around 10)
             n_problems: # of problems
         """
         super(CsbktModel, self).__init__()
@@ -296,50 +296,6 @@ class HmmCell(th.jit.ScriptModule):
         outputs = th.transpose(outputs, 0, 1)
         
         return outputs, log_alpha
-
-class SequentialLossLayer(th.jit.ScriptModule):
-
-    def __init__(self, n_skills):
-        super().__init__()
-
-        #self.n_skills = n_skills 
-        self.pmf = joint_pmf.JointPMF(n_skills) # converts N independent bernoullis into 2**N categorical
-
-    @th.jit.script_method
-    def forward(self, problem_seq, membership_logits):
-        """
-            Computes the loglikelihood that consecutive problems have the 
-            same KC.
-
-            problem_seq: [n_batch, t]
-            membership_logits: [n_problems, n_skills]
-
-            Output:
-                logprob_same_kc: [n_batch, t]
-                First element is always 0
-                Subsequent elements i represent P(a_i == a_i-1)
-        """
-        outputs = th.jit.annotate(List[Tensor], [])
-        
-        last_problem = problem_seq[:, 0] # B
-        last_problem_logits = membership_logits[last_problem, :] # Bxn_skills
-        last_problem_logprobs = self.pmf(last_problem_logits) # Bx2**n_skills
-        for i in range(1, problem_seq.shape[1]):
-            
-            curr_problem = problem_seq[:, i] # B 
-            curr_problem_logits = membership_logits[curr_problem, :] # Bxn_skills 
-            curr_problem_logprobs = self.pmf(curr_problem_logits) # Bx2**n_skills
-
-            u = last_problem_logprobs + curr_problem_logprobs # Bx2**n_skills
-            logprob_same = th.logsumexp(u, dim=1) # B 
-            outputs += [logprob_same]
-
-            last_problem_logprobs = curr_problem_logprobs
-        
-        outputs = th.stack(outputs)
-        outputs = th.transpose(outputs, 0, 1) # Bx(T-1)
-        outputs = th.concat((th.zeros_like(problem_seq[:, 0])[:,None], outputs), dim=1) #BxT
-        return outputs
 
 class NIDOLayer(th.jit.ScriptModule):
 

@@ -16,9 +16,10 @@ import sklearn.metrics
 from scipy.stats import qmc
 import csbkt
 import sklearn.cluster
-import position_encode_problems
 import loss_sequence 
 import joint_pmf
+import early_stopping_rules
+
 def main():
     import sys
 
@@ -126,16 +127,14 @@ def train(train_seqs,
           cfg):
 
     model = csbkt.CsbktModel(cfg).to(cfg['device'])
-    same_kc_loss = csbkt.SequentialLossLayer(cfg['n_skills']).to(cfg['device'])
     pmf = joint_pmf.JointPMF(cfg['n_skills'])
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['lr'])
     
+    stopping_rule = early_stopping_rules.PatienceRule(cfg['es_patience'], cfg['es_thres'], minimize=False)
+
     best_state = None
-    best_auc_roc = 0.0
-    waited = 0
     for e in range(cfg['epochs']):
         np.random.shuffle(train_seqs)
-        losses = []
 
         offset = 0
         end = offset + cfg['n_batch_seqs']
@@ -164,21 +163,18 @@ def train(train_seqs,
         train_loss.backward()
         optimizer.step()
 
-        losses.append(train_loss.item())
-        
         yvalid_true, yvalid_logprob_correct = predict(model, valid_seqs, cfg)
         auc_roc = metrics.calculate_metrics(yvalid_true, yvalid_logprob_correct)['auc_roc']
 
-        if auc_roc > best_auc_roc:
-            best_auc_roc = auc_roc
-            waited = 0
-            best_state = copy.deepcopy(model.state_dict())
-        else:
-            waited += 1
+        stop_training, new_best = stopping_rule.log(auc_roc)
+
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, train_loss.item(), auc_roc, '***' if new_best else ''))
         
-        print("%4d Train loss: %8.4f, Valid AUC-ROC: %0.2f %s" % (e, np.mean(losses), auc_roc, '***' if waited == 0 else ''))
-        if waited >= cfg['patience']:
-            break 
+        if new_best:
+            best_state = copy.deepcopy(model.state_dict())
+        
+        if stop_training:
+            break
 
     model.load_state_dict(best_state)
 
