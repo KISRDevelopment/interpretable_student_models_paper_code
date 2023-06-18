@@ -34,8 +34,9 @@ def run(train_df, test_df):
 if __name__ == "__main__":
     import sys
 
-    dataset_name = sys.argv[1]
-    output_path = sys.argv[2]
+    cfg_path = sys.argv[1] # not used
+    dataset_name = sys.argv[2]
+    output_path = sys.argv[3]
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)

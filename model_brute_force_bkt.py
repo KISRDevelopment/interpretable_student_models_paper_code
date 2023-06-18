@@ -189,15 +189,14 @@ def test_bkt(params, seqs_by_skill):
 
 if __name__ == "__main__":
     
-    input_path = sys.argv[1]
-    split_path = sys.argv[2]
+    cfg_path = sys.argv[1] # Not used .. just for consistency with other models
+    dataset_name = sys.argv[2]
     output_path = sys.argv[3]
 
-    master_df = pd.read_csv(input_path)
-
-    splits = np.load(split_path)
-
-    results_df, params_df = main(master_df, splits)
+    df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    splits = np.load("data/splits/%s.npy" % dataset_name)
+    
+    results_df, params_df = main(df, splits)
 
     params_path = output_path.replace('.csv','.params.csv')
     params_df.to_csv(params_path, index=False)
