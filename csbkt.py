@@ -8,7 +8,7 @@ from typing import List, Tuple
 import torch.nn as nn 
 from numba import jit
 import joint_pmf 
-
+import layer_seq_bayesian
 def main():
     # n_skills = 10
 
@@ -214,22 +214,38 @@ class CsbktModel(nn.Module):
         self.kc_logit_pF = nn.Parameter(th.randn(cfg['n_skills']))
         self.kc_logit_pi = nn.Parameter(th.randn(cfg['n_skills']))
 
+        self.ability_levels = th.tensor(cfg['ability_levels']).to(cfg['device']) # A
+        
         self.cfg = cfg 
 
     def forward(self, corr, problem_seq, test=False):
+        ytrue = corr
+        n_batch, n_steps = corr.shape
+        n_ability_levels = self.ability_levels.shape[0]
+
+        ability_level = th.repeat_interleave(self.ability_levels, corr.shape[0]) # B'
+        
+        corr = th.tile(corr, (n_ability_levels, 1)) # B'xT
+        problem_seq = th.tile(problem_seq, (n_ability_levels, 1)) # B'xT
+
+        logpred, _ = self.forward_(corr, problem_seq, ability_level, test) # B'xTx2
+
+        # reshape so that we can marginalize over abilities
+        logpred = th.reshape(logpred, (n_ability_levels, n_batch, n_steps, 2))
+        logpred = th.permute(logpred, (1, 0, 2, 3)) # BxAxTx2
+
+        logpred, _ = layer_seq_bayesian.seq_bayesian(logpred, ytrue) # BxTx2
+
+        return logpred
+    def forward_(self, corr, problem_seq, ability_level, test):
         # [n_states, 1]
         initial_log_prob_vec = make_initial_log_prob_vector(self.decoder, self.kc_logit_pi[:,None])
 
         # [n_batch, n_states]
         initial_log_prob_vec = th.tile(initial_log_prob_vec.T, (corr.shape[0], 1)) 
 
-        # [n_batch, t, 2]
-        return self.forward_given_alpha(corr, problem_seq, initial_log_prob_vec, test)
-        
-
-    def forward_given_alpha(self, corr, problem_seq, initial_log_prob_vec, test):
         # [n_batch, t, n_states, 2]
-        obs_log_probs = self.pred_layer(problem_seq, test)
+        obs_log_probs = self.pred_layer(problem_seq, ability_level, test)
 
         # [n_states, n_states] (Target x Source)
         trans_log_probs = make_transition_log_prob_matrix(self.tim, self.kc_logit_pL[:,None], self.kc_logit_pF[:,None])
@@ -315,10 +331,11 @@ class NIDOLayer(th.jit.ScriptModule):
         return self.membership_logits
         
     @th.jit.script_method
-    def forward(self, problem_seq, test):
+    def forward(self, problem_seq, ability_level, test):
         """
             Input:
                 problem_seq: [n_batch, t]
+                ability_level: n_batch
                 test: whether this is testing or not, if testing the membership
                 will be thresholded at 0.5
             Output:
@@ -342,6 +359,10 @@ class NIDOLayer(th.jit.ScriptModule):
         problem_logits = membership_probs @ state_logits.T # [n_problems, n_states]
 
         obs_correct_logits = problem_logits[problem_seq] # [n_batch, t, n_states]
+
+        # adjust observation probabilities to account for student ability
+        obs_correct_logits[:, :, 0] = ability_level[:, None] + obs_correct_logits[:, :, 0] # greater ability -> greater prob of guessing
+        obs_correct_logits[:, :, 1] = obs_correct_logits[:, :, 1] - ability_level[:, None] # greater ability -> smaller prob of slipping
 
         # [n_batch, t, n_states, 2]
         obs_log_probs = F.log_softmax(th.concat((-obs_correct_logits[:,:,:,None], obs_correct_logits[:,:,:,None]), dim=3), dim=3)

@@ -144,7 +144,7 @@ def train(train_seqs,
         batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
         batch_mask_seqs = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1).to(cfg['device'])
             
-        output, log_alpha = model(batch_obs_seqs, batch_problem_seqs)
+        output = model(batch_obs_seqs, batch_problem_seqs)
 
         #logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.get_membership_logits()).flatten() # B*T
 
@@ -197,7 +197,7 @@ def predict(model, seqs, cfg):
             batch_problem_seqs = pad_sequence([th.tensor(s['problem']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
             batch_mask_seqs = (pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1).to(cfg['device'])
 
-            log_prob, _ = model(batch_obs_seqs, batch_problem_seqs, test=True)
+            log_prob = model(batch_obs_seqs, batch_problem_seqs, test=True)
                 
             ypred = log_prob[:, :, 1].flatten()
             ytrue = batch_obs_seqs.flatten()
