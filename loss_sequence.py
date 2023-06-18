@@ -65,7 +65,7 @@ def mean_logprob_same_at_lag(problem_seq: Tensor, mask_ix: Tensor, membership_lo
     logprob_same = th.logsumexp(u, dim=2) # BxT-L 
     
     # compute average logprob on valid trials, B
-    mean_logprob_same = (logprob_same * mask_ix[:, lag:]).sum(1) / mask_ix[:, lag:].sum(1)
+    mean_logprob_same = (logprob_same * mask_ix[:, lag:]).sum(1) / (mask_ix[:, lag:].sum(1) + 1e-6)
     
     # sequence length has to be twice the lag at minimum
     # so that we get one cycle at least

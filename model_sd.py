@@ -42,10 +42,14 @@ def main():
 
 def run(cfg, df, splits):
     
-    # problems_to_skills = dict(zip(df['problem'], df['skill']))
-    # n_problems = np.max(df['problem']) + 1
-    # A = np.array([problems_to_skills[p] for p in range(n_problems)])
-    # cfg['ref_labels'] = A
+    problems_to_skills = dict(zip(df['problem'], df['skill']))
+    n_skills = np.max(df['skill']) + 1
+    ps = [problems_to_skills[p] for p in range(cfg['n_problems'])]
+    A = np.zeros((cfg['n_problems'], n_skills))
+    A[np.arange(A.shape[0]), ps] = 1
+    
+    cfg['ref_labels'] = A
+    cfg['n_kcs'] = n_skills
     
     print("# of problems: %d" % cfg['n_problems'])
     gdf = df.groupby('problem')['student'].count()
@@ -79,6 +83,10 @@ def run(cfg, df, splits):
         valid_seqs = [seqs[s] for s in valid_students]
         test_seqs = [seqs[s] for s in test_students]
 
+        train_problems = set(train_df['problem'])
+        test_problems = set(test_df['problem'])
+        print("# novel test problems: %d" % len(test_problems - train_problems))
+        
         model, best_aux = train(cfg, train_seqs, valid_seqs)
         ytrue_test, log_ypred_test = predict(cfg, model, test_seqs)
         
@@ -146,11 +154,10 @@ def train(cfg, train_seqs, valid_seqs):
             train_loss.backward()
             optimizer.step()
 
-            
             losses.append(train_loss.item())
         
         mean_train_loss = np.mean(losses)
-
+        
         #
         # Validation
         #
@@ -181,7 +188,10 @@ def predict(cfg, model, seqs):
     with th.no_grad():
 
         # draw sample assignments
-        As = [model.kc_discovery.sample_A(1e-6, True) for i in range(cfg['n_test_samples'])]
+        As = [model.kc_discovery.sample_A(1e-6, True)[None,:,:] for i in range(cfg['n_test_samples'])]
+        As = th.vstack(As) # SxPxK
+        
+        #print("Sampled")
 
         # go over batches
         batch_logpred_correct = []
@@ -197,17 +207,21 @@ def predict(cfg, model, seqs):
             mask_ix = batch_mask_seqs.flatten()
 
             # call the model for each A 
-            all_logpred_correct = []
-            for A in As:
-                logpred = model.forward_test(batch_obs_seqs, batch_problem_seqs, A) # BxTx2
-                logpred_correct = logpred[:,:,1].flatten() # B*T
-                logpred_correct = logpred_correct[mask_ix]
-                all_logpred_correct.append(logpred_correct.cpu())
+            # all_logpred_correct = []
+            # for A in As:
+            #     logpred = model.forward_test(batch_obs_seqs, batch_problem_seqs, A) # BxTx2
+            #     logpred_correct = logpred[:,:,1].flatten() # B*T
+            #     logpred_correct = logpred_correct[mask_ix]
+            #     all_logpred_correct.append(logpred_correct.cpu())
             
-            # average preds
-            final_logpred_correct = th.vstack(all_logpred_correct) # SxNb
-            final_logpred_correct = th.logsumexp(final_logpred_correct, dim=0) - np.log(final_logpred_correct.shape[0]) # Nb
-            batch_logpred_correct.append(final_logpred_correct.numpy())
+            logpred = model.forward_test_multisample(batch_obs_seqs, batch_problem_seqs, As) # SxBxTx2
+            logpred_correct = logpred[:, :, :, 1] # SxBxT
+
+            final_logpred_correct = th.logsumexp(logpred_correct, dim=0) - np.log(logpred_correct.shape[0]) # BxT
+            final_logpred_correct = final_logpred_correct.flatten()
+            final_logpred_correct = final_logpred_correct[mask_ix]
+
+            batch_logpred_correct.append(final_logpred_correct.cpu().numpy())
 
             # get actual observations
             corr = batch_obs_seqs.flatten() 
@@ -217,7 +231,6 @@ def predict(cfg, model, seqs):
         # concatenate everything
         logpred = np.hstack(batch_logpred_correct)
         ytrue = np.hstack(batch_corr)
-    
     
     return ytrue, logpred
 
@@ -233,7 +246,7 @@ class BktModel(nn.Module):
         self._obs_logits = nn.Parameter(th.randn(cfg['n_kcs'], 2)) # pG, pS
 
         # KC Discovery
-        self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_problems'], cfg['n_kcs'])
+        self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['ref_labels'])
 
         #
         # BKT Module
@@ -293,7 +306,24 @@ class BktModel(nn.Module):
         logpred = self.hmm(corr, kc, trans_logits, obs_logits, init_logits) # BxTx2
 
         return logpred 
-        
+    
+    def forward_test_multisample(self, corr, problem, As):
+        """
+            As: SxPxK
+        """
+
+        # put BKT parameters into the right format
+        trans_logits, obs_logits, init_logits = get_logits(self._dynamics_logits, self._obs_logits)
+
+        kc = th.reshape(As[:, problem, :], (As.shape[0] * corr.shape[0], corr.shape[1], As.shape[2])) # S*BxTxK
+        tiled_corr = th.tile(corr, (As.shape[0], 1)) # B*S x T
+
+        logpred = self.hmm(tiled_corr, kc, trans_logits, obs_logits, init_logits) # B*S x Tx2
+
+        logpred = th.reshape(logpred, (As.shape[0], -1, corr.shape[1], 2)) # SxBxTx2
+
+        return logpred
+
 @jit.script
 def get_logits(dynamics_logits, obs_logits):
     
