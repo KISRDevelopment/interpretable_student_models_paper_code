@@ -30,10 +30,11 @@ def load_results(path):
         df = pd.read_csv(file)
         df['model'] = model 
 
-        n_students = dataset.split('_')[-1]
-        n_students = int(n_students)
-        df['n_students'] = n_students
+        n_students, n_trials_per_skill = dataset.split('_')[-2:]
         
+        df['n_students'] = int(n_students)
+        df['n_trials_per_skill'] = int(n_trials_per_skill)
+
         dfs.append(df)
     
     df = pd.concat(dfs, axis=0, ignore_index=True)
@@ -41,6 +42,7 @@ def load_results(path):
         'Unnamed: 0' : 'split'
     }, inplace=True)
 
+    df.sort_values(['n_students', 'n_trials_per_skill'], inplace=True)
     return df
 
 if __name__ == "__main__":

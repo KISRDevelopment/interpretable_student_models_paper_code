@@ -8,7 +8,7 @@ def main():
     rng.seed(96789)
 
     n_skills = 25
-    ns_students = [10, 100, 1000]
+    ns_students = [10, 100, 1000, 3000]
     ns_trials_per_skill = [10, 50, 100, 500]
 
     # pI, pL, pF, pG, pS

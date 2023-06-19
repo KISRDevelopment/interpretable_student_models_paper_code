@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd 
 from collections import defaultdict
 import torch as th 
+import glob 
+import os 
 
 def main(input_dir, output_path):
 
@@ -9,27 +11,35 @@ def main(input_dir, output_path):
     actual_params = np.load(actual_params)
     n_kcs = actual_params.shape[0]
 
-    ns_students = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
     col_labels = ['pI0', 'pL', 'pF', 'pG', 'pS']
 
+    param_files = glob.glob("%s/*.params.npy.npz" % (input_dir))
+    
     dfs = []
-    for n_students in ns_students:
-        diffs_by_kc = get_torch_bkt_probs("%s/bkt_perf_%d.params.npy.npz" % (input_dir, n_students), actual_params)
+    for param_file in param_files:
+        parts = os.path.basename(param_file).replace('.params.npy.npz','').split('_')
+        model = parts[0]
+        n_students, n_trials_per_skill = parts[-2:]
+
+        diffs_by_kc = get_torch_bkt_probs(param_file, actual_params)
         df = reshape_df(diffs_by_kc)
-        df['model'] = 'bkt'
-        df['n_students'] = n_students
+        df['model'] = model
+        df['n_students'] = int(n_students)
+        df['n_trials_per_skill'] = int(n_trials_per_skill)
         dfs.append(df)
 
-        diffs_by_kc = get_torch_bkt_probs("%s/fbkt_perf_%d.params.npy.npz" % (input_dir, n_students), actual_params)
-        df = reshape_df(diffs_by_kc)
-        df['model'] = 'fbkt'
-        df['n_students'] = n_students
-        dfs.append(df)
 
-        diffs_by_kc = get_brute_force_bkt_probs("%s/bkt-brute-force_perf_%d.params.csv" % (input_dir, n_students), actual_params)
+    param_files = glob.glob("%s/*.params.csv" % (input_dir))
+    for param_file in param_files:
+        parts = os.path.basename(param_file).replace('.params.csv','').split('_')
+        model = parts[0]
+        n_students, n_trials_per_skill = parts[-2:]
+
+        diffs_by_kc = get_brute_force_bkt_probs(param_file, actual_params)
         df = reshape_df(diffs_by_kc)
         df['model'] = 'brute-force-bkt'
-        df['n_students'] = n_students
+        df['n_students'] = int(n_students)
+        df['n_trials_per_skill'] = int(n_trials_per_skill)
         dfs.append(df)
     
     df = pd.concat(dfs, axis=0, ignore_index=True)
