@@ -9,6 +9,8 @@ import torch.nn as nn
 from numba import jit
 import joint_pmf 
 import layer_seq_bayesian
+import sklearn.cluster
+
 def main():
     # n_skills = 10
 
@@ -196,12 +198,8 @@ class CsbktModel(nn.Module):
         #
         # generates output predictions given state
         #
-        if cfg['pred_layer'] == 'nida':
-            self.pred_layer = NIDALayer(cfg['n_problems'], self.decoder)
-        elif cfg['pred_layer'] == 'nido':
-            self.pred_layer = NIDOLayer(cfg['n_problems'], self.decoder)
-        elif cfg['pred_layer'] == 'featurized_nido':
-            self.pred_layer = FeaturizedNIDOLayer(cfg['problem_feature_mat'], self.decoder, cfg['n_hidden'])
+        self.pred_layer = NIDOLayer(cfg['n_problems'], self.decoder, cfg.get('problem_feature_mat', None))
+        
         # 
         # BKT HMM
         #
@@ -315,20 +313,24 @@ class HmmCell(th.jit.ScriptModule):
 
 class NIDOLayer(th.jit.ScriptModule):
 
-    def __init__(self, n_problems, decoder):
+    def __init__(self, n_problems, decoder, problem_feature_mat):
         super().__init__()
 
         n_states, n_skills = decoder.shape 
 
         self.skill_offset = nn.Parameter(th.randn(n_skills))
         self.skill_slope = nn.Parameter(th.randn(n_skills))
-        self.membership_logits = nn.Parameter(th.randn(n_problems, n_skills))
+
+        if problem_feature_mat is None:
+            self.membership_layer = ShallowProblemMembershipLayer(n_problems, n_skills)
+        else:
+            self.membership_layer = FeaturizedProblemMembershipLayer(problem_feature_mat, n_skills)
         
         self.decoder = decoder # [n_states, n_skills]
 
     @th.jit.script_method
     def get_membership_logits(self):
-        return self.membership_logits
+        return self.membership_layer.get_membership_logits()
         
     @th.jit.script_method
     def forward(self, problem_seq, ability_level, test):
@@ -352,7 +354,7 @@ class NIDOLayer(th.jit.ScriptModule):
         #
         # compute problem logits
         #
-        membership_probs = th.sigmoid(self.membership_logits) # [n_problems, n_skills]
+        membership_probs = th.sigmoid(self.get_membership_logits()) # [n_problems, n_skills]
         if test:
             membership_probs = (membership_probs > 0.5) * 1.0
             
@@ -369,5 +371,36 @@ class NIDOLayer(th.jit.ScriptModule):
 
         return obs_log_probs
 
+class ShallowProblemMembershipLayer(th.jit.ScriptModule):
+
+    def __init__(self, n_problems, n_skills):
+        super().__init__()
+        self.membership_logits = nn.Parameter(th.randn(n_problems, n_skills))
+    
+    @th.jit.script_method
+    def get_membership_logits(self):
+        return self.membership_logits
+
+class FeaturizedProblemMembershipLayer(th.jit.ScriptModule):
+
+    def __init__(self, problem_feature_mat, n_skills):
+        super().__init__()
+
+        # perform clustering
+        kmeans = sklearn.cluster.KMeans(n_clusters=n_skills, n_init='auto').fit(problem_feature_mat.cpu().numpy())
+
+        # get initial assignment
+        A = kmeans.labels_
+        A = F.one_hot(th.tensor(A).long(), num_classes=n_skills).float().to('cuda:0')
+        
+        # initialize
+        #self.logits = nn.Parameter(A * 10 - 10*(1-A))
+        self.logits = A*10 - 10*(1-A)
+        self.problem_feature_mat = problem_feature_mat
+
+    @th.jit.script_method
+    def get_membership_logits(self):
+        return self.logits
+    
 if __name__ == "__main__":
     main()

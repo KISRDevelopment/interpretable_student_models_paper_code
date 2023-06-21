@@ -29,6 +29,10 @@ def main():
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
 
+    if len(sys.argv) > 4:
+        problem_feature_mat_path = sys.argv[4]
+        cfg['problem_feature_mat_path'] = problem_feature_mat_path
+
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     
     splits = np.load("data/splits/%s.npy" % dataset_name)
@@ -37,7 +41,7 @@ def main():
     cfg['device'] = 'cuda:0'
 
     results_df = run(cfg, df, splits)
-
+    
     results_df.to_csv(output_path)
 
 def run(cfg, df, splits):
@@ -58,8 +62,16 @@ def run(cfg, df, splits):
     print("95%% occurance range: %d-%d" % (lower,upper))
     print("# of problems occuring at least 10 times: %d" % np.sum(gdf >= 10))
     
+    if 'problem_feature_mat_path' in cfg:
+        problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
+        mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
+        std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
+        problem_feature_mat = (problem_feature_mat - mu) / (std+1e-9)
+        cfg['problem_feature_mat'] = th.tensor(problem_feature_mat).float().to(cfg['device'])
+
     seqs = to_student_sequences(df)
-    
+    ref_assignment = get_problem_skill_assignment(df)
+
     all_ytrue = []
     all_ypred = []
 
@@ -87,17 +99,19 @@ def run(cfg, df, splits):
         test_problems = set(test_df['problem'])
         print("# novel test problems: %d" % len(test_problems - train_problems))
         
-        model, best_aux = train(cfg, train_seqs, valid_seqs)
+        model = train(cfg, train_seqs, valid_seqs)
         ytrue_test, log_ypred_test = predict(cfg, model, test_seqs)
         
         ypred_test = np.exp(log_ypred_test)
 
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
-        
+        rand_index = compare_kc_assignment(model, ref_assignment)
+        run_result['rand_index'] = rand_index
+
         results.append(run_result)
         
-    results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
-    
+        results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(len(results))])
+        print(results_df)
     return results_df
 
 
@@ -146,7 +160,7 @@ def train(cfg, train_seqs, valid_seqs):
             mask_ix = mask_ix.flatten()
             train_loss = train_loss[mask_ix].mean() 
 
-            mlogprobs = F.log_softmax(model.kc_discovery._logits, dim=1)
+            mlogprobs = F.log_softmax(model.kc_discovery.get_logits(), dim=1)
             aux_loss = loss_sequence.nback_loss(batch_problem_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
 
             train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
@@ -176,8 +190,8 @@ def train(cfg, train_seqs, valid_seqs):
             break
 
     model.load_state_dict(best_state)
-    exit()
-    return model, best_aux
+    
+    return model
     
 
 def predict(cfg, model, seqs):
@@ -246,7 +260,10 @@ class BktModel(nn.Module):
         self._obs_logits = nn.Parameter(th.randn(cfg['n_kcs'], 2)) # pG, pS
 
         # KC Discovery
-        self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['ref_labels'])
+        if 'problem_feature_mat' in cfg:
+            self.kc_discovery = layer_kc_discovery.FeaturizedKCDiscovery(cfg['problem_feature_mat'], cfg['n_kcs'])
+        else:
+            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_problems'], cfg['n_kcs'])
 
         #
         # BKT Module
@@ -339,6 +356,22 @@ def get_logits(dynamics_logits, obs_logits):
                              dynamics_logits[:, [2]])) # (Latent KCs x 2)
 
     return trans_logits, obs_logits, init_logits
+
+def compare_kc_assignment(model, ref_assignment):
+    with th.no_grad():
+        membership_logits = model.kc_discovery.get_logits().cpu().numpy()
+    pred_assignment = np.argmax(membership_logits, axis=1)
+
+    rand_index = sklearn.metrics.adjusted_rand_score(ref_assignment, pred_assignment)
+
+    return rand_index
+
+def get_problem_skill_assignment(df):
+
+    problems_to_skills = dict(zip(df['problem'], df['skill']))
+    n_problems = np.max(df['problem']) + 1
+    return np.array([problems_to_skills[p] for p in range(n_problems)])
+    
 
 if __name__ == "__main__":
     main()

@@ -16,8 +16,8 @@ def main():
     n_students = 100
     n_problems_per_skill = 10
     n_features = 50
-    target_nn_acc = 0.75
-    
+    target_nn_acc = 0.85
+    std_range = np.linspace(0, 1, 50)
     ns_skills = [1, 5, 25, 50]
     
     for n_skills in ns_skills:
@@ -40,7 +40,7 @@ def main():
             n_problems_per_skill, 
             n_features, 
             target_nn_acc,
-            np.linspace(0.75, 1.25, 25))
+            std_range)
         np.save("data/datasets/sd_%d.embeddings.npy" % n_skills, X)
 
         #
@@ -112,11 +112,12 @@ def generate_clusters(n_clusters,
             min_diff = acc_diff
             best_std = cluster_std 
         elif acc_diff - last_diff > 0.02:
-            break # diff is starting to increase
+            pass
+            #break # diff is starting to increase
         
         last_diff = acc_diff
     
-    print("Best Std: %0.2f" % best_std)
+    print("Best Std: %0.2f (diff: %0.2f)" % (best_std, min_diff))
     X, y = sklearn.datasets.make_blobs(n_samples=n_clusters*n_samples_per_cluster, 
                                         centers=n_clusters, 
                                         n_features=n_features, 

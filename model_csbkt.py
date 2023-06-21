@@ -58,24 +58,26 @@ def run(cfg, df, splits):
     print("95%% occurance range: %d-%d" % (lower,upper))
     print("# of problems occuring at least 10 times: %d" % np.sum(gdf >= 10))
     
-    if cfg['pred_layer'] == 'featurized_nido':
-        if 'problem_feature_mat_path' in cfg:
-            problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
-        else:
-            problem_feature_mat = position_encode_problems.encode_problem_pos_distribs(df, n_problems)
-            #problem_feature_mat = th.tensor(problem_feature_mat).float().to(cfg['device'])
 
+    ref_assignment = get_problem_skill_assignment(df)
+
+    if 'problem_feature_mat_path' in cfg:
+        problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
         mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
         std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
         problem_feature_mat = (problem_feature_mat - mu) / std
+
+        # print("CHEAT MODE ON! TURN OFF FOR PRODUCTION")
+        # problem_feature_mat = np.zeros((n_problems, np.max(ref_assignment)+1))
+        # problem_feature_mat[np.arange(problem_feature_mat.shape[0]), ref_assignment] = 1
+        # print(np.sum(problem_feature_mat, axis=0))
+        
         cfg['problem_feature_mat'] = th.tensor(problem_feature_mat).float().to(cfg['device'])
     
     seqs = to_student_sequences(df)
     
     results = []
     
-    ref_assignment = get_problem_skill_assignment(df)
-
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -146,8 +148,6 @@ def train(train_seqs,
             
         output = model(batch_obs_seqs, batch_problem_seqs)
 
-        #logprob_same_kc = same_kc_loss(batch_problem_seqs, model.pred_layer.get_membership_logits()).flatten() # B*T
-
         train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
         
         mlogprobs = pmf(model.pred_layer.get_membership_logits())
@@ -156,9 +156,7 @@ def train(train_seqs,
         mask_ix = batch_mask_seqs.flatten()
             
         train_loss = train_loss[mask_ix].mean() 
-        #aux_loss = -logprob_same_kc[mask_ix].mean()
-        train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
-            
+        train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss 
         optimizer.zero_grad()
         train_loss.backward()
         optimizer.step()

@@ -40,6 +40,9 @@ def main():
 
     if not cfg['problem_effects']:
         df['problem'] = 0
+    if cfg.get('single_kc', False):
+        df['skill'] = 0
+    
     cfg['n_kcs'] = np.max(df['skill']) + 1
     cfg['n_problems'] = np.max(df['problem']) + 1
     cfg['device'] = 'cuda:0'

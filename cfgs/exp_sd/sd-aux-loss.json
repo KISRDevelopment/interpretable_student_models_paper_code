@@ -1,4 +1,5 @@
 {
+    "script" : "model_sd.py",
     "n_kcs" : 20,
     "learning_rate" : 0.1, 
     "epochs" : 100, 

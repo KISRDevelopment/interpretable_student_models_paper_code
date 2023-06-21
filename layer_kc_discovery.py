@@ -9,20 +9,33 @@ from typing import List
 
 class SimpleKCDiscovery(nn.Module):
 
-    def __init__(self, initial_A):
+    def __init__(self, n_problems, n_kcs):
         super().__init__()
         
-        initial_A = th.tensor(initial_A)
-
-        n_problems, n_kcs = initial_A.shape 
-
         self.n_problems = n_problems
         self.n_kcs = n_kcs 
 
-        self._logits = nn.Parameter(initial_A * 5 + (1-initial_A) * -5)
+        self._logits = nn.Parameter(th.randn(n_problems, n_kcs))
 
     def sample_A(self, tau, hard):
         return nn.functional.gumbel_softmax(self._logits, hard=hard, tau=tau, dim=1)
+    
+    def get_logits(self):
+        return self._logits
+
+class FeaturizedKCDiscovery(nn.Module):
+
+    def __init__(self, problem_feature_mat, n_kcs):
+        super().__init__()
+
+        self._proj = nn.Linear(problem_feature_mat.shape[1], n_kcs)
+        self.problem_feature_mat = problem_feature_mat
+    def sample_A(self, tau, hard):
+        logits = self.get_logits()
+        return nn.functional.gumbel_softmax(logits, hard=hard, tau=tau, dim=1)
+    
+    def get_logits(self):
+        return self._proj(self.problem_feature_mat)
         
 if __name__ == "__main__":
 
