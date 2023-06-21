@@ -42,6 +42,8 @@ def main():
         df['problem'] = 0
     if cfg.get('single_kc', False):
         df['skill'] = 0
+    if cfg.get('problems_as_skills', False):
+        df['skill'] = df['problem']
     
     cfg['n_kcs'] = np.max(df['skill']) + 1
     cfg['n_problems'] = np.max(df['problem']) + 1

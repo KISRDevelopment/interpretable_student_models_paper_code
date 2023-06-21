@@ -12,13 +12,14 @@ import os
 import sys 
 import json 
 
+variant = '_interleaved'
 def main():
     cfg_path = sys.argv[1]
     output_dir = sys.argv[2]
     use_embeddings = sys.argv[3] == '1'
 
     datasets = [os.path.basename(p).replace('.csv','') for p in 
-        glob.glob("data/datasets/sd_*_blocked.csv")]
+        glob.glob("data/datasets/sd_*%s.csv" % variant)]
     datasets = sorted(datasets, key=lambda d: int(d.split('_')[1]))
 
     os.makedirs(output_dir, exist_ok=True)
@@ -35,7 +36,7 @@ def main():
             print("Ignoring %s because results already exist" % dataset)
             continue
         
-        embedding_path = "./data/datasets/%s.embeddings.npy" % (dataset.replace('_blocked',''))
+        embedding_path = "./data/datasets/%s.embeddings.npy" % (dataset.replace(variant,''))
         print(cfg_name, dataset, embedding_path)
         output_path = "%s/%s_%s.csv" % (output_dir, cfg_name, dataset)
 
