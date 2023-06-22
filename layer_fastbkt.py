@@ -33,6 +33,8 @@ class FastBkt(jit.ScriptModule):
         self._pred_ind = th.tensor(pred_ind).long().to(device)
         self._device = device 
 
+        self.temporal_batch_size = n * 8
+
     def pad(self, seqs, padding_value):
         return pad_to_multiple(seqs, multiple=self.n, padding_value=padding_value)
     
@@ -86,6 +88,9 @@ class FastBkt(jit.ScriptModule):
         pred_corrects = th.jit.annotate(List[Tensor], [])
         pred_incorrects = th.jit.annotate(List[Tensor], [])
         for i in range(0, corr.shape[1], self.n):
+            if (i > 0) and (i % self.temporal_batch_size == 0):
+                logprob_h = logprob_h.detach()
+            
             from_index = i
             to_index = from_index + self.n 
 

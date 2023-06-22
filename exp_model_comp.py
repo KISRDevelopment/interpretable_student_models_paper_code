@@ -3,139 +3,42 @@ import glob
 import os 
 import json 
 import pandas as pd 
+import sys 
+
+datasets = sorted(['gervetetal_assistments12', 
+    'gervetetal_bridge_algebra06', 
+    'gervetetal_assistments17', 
+    'gervetetal_assistments15', 
+    'gervetetal_algebra05', 
+    'gervetetal_spanish', 
+    'gervetetal_assistments09', 
+    'gervetetal_statics'
+])
 
 def main():
-    output_dir = 'data/results-pytorch'
+    cfg_path = sys.argv[1]
+    output_dir = sys.argv[2]
+
     os.makedirs(output_dir, exist_ok=True)
+
+    cfg_name = os.path.basename(cfg_path).replace('.json', '')
     
-    datasets = ['gervetetal_assistments12', 
-        'gervetetal_bridge_algebra06', 
-        'gervetetal_assistments17', 
-        'gervetetal_assistments15', 
-        'gervetetal_algebra05', 
-        'gervetetal_spanish', 
-        'gervetetal_assistments09', 
-        'gervetetal_statics']
-
-    datasets.reverse()
-
-    model_script = 'torch_bkt.py'
-    cfg = {
-        "learning_rate" : 0.5, 
-        "epochs" : 100, 
-        "patience" : 10,
-        "n_batch_seqs" : 500,
-        "n_test_batch_seqs" : 500,
-        "cfg_name" : "bkt"
-    }
-    run_model(cfg, model_script, datasets, output_dir)
-
-    model_script = 'torch_bkt_problems.py'
-    cfg = {
-        "learning_rate" : 0.5, 
-        "epochs" : 100, 
-        "patience" : 10,
-        "n_batch_seqs" : 500,
-        "n_test_batch_seqs" : 500,
-        "cfg_name" : "bkt-problems"
-    }
-    run_model(cfg, model_script, datasets, output_dir)
-
-    model_script = 'torch_bkt_abilities.py'
-    cfg = {
-        "learning_rate" : 0.5, 
-        "epochs" : 100, 
-        "patience" : 10,
-        "n_batch_seqs" : 500,
-        "n_abilities" : 5,
-        "min_ability" : -3,
-        "max_ability" : 3,
-        "cfg_name" : "bkt-abilities"
-    }
-    run_model(cfg, model_script, datasets, output_dir)
-
-    model_script = 'torch_bkt_irt.py'
-    cfg = {
-        "learning_rate" : 0.5, 
-        "epochs" : 100, 
-        "patience" : 10,
-        "n_batch_seqs" : 500,
-        "n_abilities" : 5,
-        "min_ability" : -3,
-        "max_ability" : 3,
-        "cfg_name" : "bkt-irt"
-    }
-    run_model(cfg, model_script, datasets, output_dir)
-
-    model_script = 'torch_bkt_skill_discovery.py'
-    cfg = {
-        "learning_rate" : 0.1, 
-        "epochs" : 20, 
-        "patience" : 5,
-        "tau" : 1.5,
-        "n_latent_kcs" : 20,
-        "lambda" : 0.00,
-        "n_batch_seqs" : 20,
-        "n_test_batch_seqs" : 500,
-        "hard_samples" : False,
-        "ref_labels" : None,
-        "use_problems" : True,
-        "n_initial_kcs" : 5,
-        "n_valid_samples" : 50,
-        "n_test_samples" : 50,
-        "n_train_samples" : 1,
-        "cfg_name" : "bkt-sd"
-    }
-    run_model(cfg, model_script, datasets, output_dir)
-
-    model_script = "model_csbkt.py"
-    cfg = {
-        "n_skills" : 7,
-        "pred_layer" : "nido",
-        "lr" : 0.5,
-        "epochs" : 100,
-        "patience" : 10,
-        "n_batch_seqs" : 50,
-        "n_test_batch_seqs" : 50,
-        "aux_loss_coeff" : 1.0,
-        "n_hidden" : 10,
-        "cfg_name" : "csbkt-aux_loss"
-    }
-    run_model(cfg, model_script, datasets, output_dir)
-
-    model_script = "model_csbkt.py"
-    cfg = {
-        "n_skills" : 7,
-        "pred_layer" : "nido",
-        "lr" : 0.5,
-        "epochs" : 100,
-        "patience" : 10,
-        "n_batch_seqs" : 50,
-        "n_test_batch_seqs" : 50,
-        "aux_loss_coeff" : 0.0,
-        "n_hidden" : 10,
-        "cfg_name" : "csbkt"
-    }
-    run_model(cfg, model_script, datasets, output_dir)
-
-def run_model(cfg, model_script, datasets, base_path):
-    with open('tmp/model_cfg.json', 'w') as f:
-        json.dump(cfg, f, indent=4)
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
     
-    cfg_name = cfg['cfg_name']
     for dataset in datasets:
-        results_path = os.path.join(base_path, "%s_%s.csv" % (cfg_name, dataset))
-
-        if os.path.exists(results_path):
-            print("%s exists ... ignoring" % (results_path))
+        if os.path.exists("%s/%s_%s.csv"%(output_dir, cfg_name, dataset)):
+            print("Ignoring %s because results already exist" % dataset)
             continue
-    
-        print(dataset)
+        
+        print(cfg_name, dataset)
+        output_path = "%s/%s_%s.csv" % (output_dir, cfg_name, dataset)
 
-        subprocess.call(['python', model_script, 
-            "tmp/model_cfg.json", 
-            dataset, 
-            results_path])
+        subprocess.call(['python', cfg['script'], cfg_path, dataset, output_path])
 
+        exp_cfg_path = output_path.replace('.csv', '.json')
+        with open(exp_cfg_path, 'w') as f:
+           json.dump(cfg, f, indent=4)
+        
 if __name__ == "__main__":
     main()
