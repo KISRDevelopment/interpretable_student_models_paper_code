@@ -13,6 +13,8 @@ import copy
 import json
 import time 
 import sklearn.metrics
+import early_stopping_rules 
+
 class MultiHmmCell(jit.ScriptModule):
     
     def __init__(self, n_states, n_outputs, n_chains):
@@ -119,13 +121,16 @@ def to_student_sequences(df):
         seqs[r.student]["kc"].append(r.skill)
     return seqs
 
-def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, stopping_rule, tau, **kwargs):
+def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_seqs, tau, **kwargs):
 
     model = BktModel(n_kcs, kwargs['n_latent_kcs'], kwargs['n_initial_kcs'])
     model = model.to(device)
     
     optimizer = th.optim.NAdam(model.parameters(), lr=learning_rate)
     
+    stopping_rule = early_stopping_rules.PatienceRule(kwargs['es_patience'], kwargs['es_thres'], minimize=False)
+
+
     best_state = None 
     best_rand_index = 0
     for e in range(epochs):
@@ -198,20 +203,17 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
                 rand_index = np.mean(indecies)
             n_utilized_kcs = np.mean(n_utilized_kcs)
 
-        r = stopping_rule(auc_roc)
+        stop_training, new_best = stopping_rule.log(auc_roc)
 
-        print("%4d Train loss: %8.4f, Valid AUC: %0.2f (Rand: %0.2f, Utilized KCS: %d) %s" % (e, mean_train_loss, auc_roc, 
-            rand_index,
-            n_utilized_kcs,
-            '***' if r['new_best'] else ''))
+        print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if new_best else ''))
         
-        if r['new_best']:
+        if new_best:
             best_state = copy.deepcopy(model.state_dict())
             best_aux = {
                 "rand_index" : rand_index,
                 "n_utilized_kcs" : n_utilized_kcs
             }
-        if r['stop']:
+        if stop_training:
             break
 
     model.load_state_dict(best_state)
@@ -327,12 +329,9 @@ def main(cfg, df, splits):
 
         tic = time.perf_counter()
 
-        stopping_rule = create_early_stopping_rule(cfg['patience'], cfg.get('min_perc_improvement', 0))
-
         model, best_aux = train(train_seqs, valid_seqs, 
             n_kcs=n_kcs, 
             device='cuda:0',
-            stopping_rule=stopping_rule,
             **cfg)
 
         ytrue_test, log_ypred_test = predict(model, test_seqs, cfg['n_test_batch_seqs'], 'cuda:0', cfg['n_test_samples'])
@@ -375,7 +374,8 @@ if __name__ == "__main__":
     cfg = {
         "learning_rate" : 0.1, 
         "epochs" : 20, 
-        "patience" : 5,
+        "es_patience" : 10,
+        "es_thres" : 0.01,
         "tau" : 1.5,
         "n_latent_kcs" : 20,
         "lambda" : 0.00,
