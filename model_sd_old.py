@@ -14,71 +14,72 @@ import json
 import time 
 import sklearn.metrics
 import early_stopping_rules 
+import layer_multihmmcell
 
-class MultiHmmCell(jit.ScriptModule):
+# class MultiHmmCell(jit.ScriptModule):
     
-    def __init__(self, n_states, n_outputs, n_chains):
-        super(MultiHmmCell, self).__init__()
+#     def __init__(self, n_states, n_outputs, n_chains):
+#         super(MultiHmmCell, self).__init__()
         
-        self.n_states = n_states
-        self.n_outputs = n_outputs
-        self.n_chains = n_chains 
+#         self.n_states = n_states
+#         self.n_outputs = n_outputs
+#         self.n_chains = n_chains 
 
-        # [n_hidden,n_hidden] (Target,Source)
-        self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
-        self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
-        self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
+#         # [n_hidden,n_hidden] (Target,Source)
+#         self.trans_logits = nn.Parameter(th.randn(n_chains, n_states, n_states))
+#         self.obs_logits = nn.Parameter(th.randn(n_chains, n_states, n_outputs))
+#         self.init_logits = nn.Parameter(th.randn(n_chains, n_states))
         
-    @jit.script_method
-    def forward(self, obs: Tensor, chain: Tensor) -> Tensor:
-        """
-            obs: [n_batch, t]
-            chain: [n_batch, t, n_chains]
-            output:
-            [n_batch, t, n_outputs]
-        """
-        outputs = th.jit.annotate(List[Tensor], [])
+#     @jit.script_method
+#     def forward(self, obs: Tensor, chain: Tensor) -> Tensor:
+#         """
+#             obs: [n_batch, t]
+#             chain: [n_batch, t, n_chains]
+#             output:
+#             [n_batch, t, n_outputs]
+#         """
+#         outputs = th.jit.annotate(List[Tensor], [])
         
-        n_batch, _ = obs.shape
-        batch_idx = th.arange(n_batch)
+#         n_batch, _ = obs.shape
+#         batch_idx = th.arange(n_batch)
 
-        log_alpha = F.log_softmax(self.init_logits, dim=1) # n_chains x n_states
-        log_obs = F.log_softmax(self.obs_logits, dim=2) # n_chains x n_states x n_obs
-        log_t = F.log_softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
+#         log_alpha = F.log_softmax(self.init_logits, dim=1) # n_chains x n_states
+#         log_obs = F.log_softmax(self.obs_logits, dim=2) # n_chains x n_states x n_obs
+#         log_t = F.log_softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
         
-        # B X C X S
-        log_alpha = th.tile(log_alpha, (n_batch, 1, 1))
-        for i in range(0, obs.shape[1]):
-            curr_chain = chain[:,i,:] # B X C
+#         # B X C X S
+#         log_alpha = th.tile(log_alpha, (n_batch, 1, 1))
+#         for i in range(0, obs.shape[1]):
+#             curr_chain = chain[:,i,:] # B X C
             
-            # predict
-            a1 = (curr_chain[:,:,None, None] * log_obs[None,:,:,:]).sum(1) # B X S X O
-            a2 = (curr_chain[:,:,None] * log_alpha).sum(1) # BXCX1 * BXCXS = BXS
+#             # predict
+#             a1 = (curr_chain[:,:,None, None] * log_obs[None,:,:,:]).sum(1) # B X S X O
+#             a2 = (curr_chain[:,:,None] * log_alpha).sum(1) # BXCX1 * BXCXS = BXS
 
-            # B X S X O + B X S X 1
-            log_py = th.logsumexp(a1 + a2[:,:,None], dim=1)  # B X O
+#             # B X S X O + B X S X 1
+#             log_py = th.logsumexp(a1 + a2[:,:,None], dim=1)  # B X O
             
-            log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
-            outputs += [log_py]
+#             log_py = log_py - th.logsumexp(log_py, dim=1)[:,None]
+#             outputs += [log_py]
 
-            # update
-            curr_y = obs[:,i]
-            a1 = th.permute(log_obs[:,:,curr_y], (2, 0, 1)) # B X C X S
-            log_py = (a1 * curr_chain[:,:,None]).sum(1) # B X S
+#             # update
+#             curr_y = obs[:,i]
+#             a1 = th.permute(log_obs[:,:,curr_y], (2, 0, 1)) # B X C X S
+#             log_py = (a1 * curr_chain[:,:,None]).sum(1) # B X S
             
 
-            a1 = (log_alpha * curr_chain[:,:,None]).sum(1) # BxCxS * BxCx1 = BxS
-            a2 = (log_t[None,:,:,:] * curr_chain[:,:,None,None]).sum(1) # 1xCxSxS * BxCx1x1 = BxSxS
-            a3 = th.logsumexp(log_py[:,None,:] + a1[:,None,:] + a2, dim=2)
+#             a1 = (log_alpha * curr_chain[:,:,None]).sum(1) # BxCxS * BxCx1 = BxS
+#             a2 = (log_t[None,:,:,:] * curr_chain[:,:,None,None]).sum(1) # 1xCxSxS * BxCx1x1 = BxSxS
+#             a3 = th.logsumexp(log_py[:,None,:] + a1[:,None,:] + a2, dim=2)
 
-            # B x 1 X S + B x 1 x S + B x S x S = B x S
-            log_alpha = (1 - curr_chain[:,:,None]) * log_alpha + curr_chain[:,:,None] * a3[:,None,:]
+#             # B x 1 X S + B x 1 x S + B x S x S = B x S
+#             log_alpha = (1 - curr_chain[:,:,None]) * log_alpha + curr_chain[:,:,None] * a3[:,None,:]
         
         
-        outputs = th.stack(outputs)
-        outputs = th.transpose(outputs, 0, 1)
+#         outputs = th.stack(outputs)
+#         outputs = th.transpose(outputs, 0, 1)
         
-        return outputs
+#         return outputs
 
 class BktModel(nn.Module):
     def __init__(self, n_kcs, n_latent_kcs, n_initial_kcs):
@@ -89,7 +90,13 @@ class BktModel(nn.Module):
 
         self.kc_membership_logits = nn.Embedding.from_pretrained(weight_matrix, freeze=False)
 
-        self.hmm = MultiHmmCell(2, 2, n_latent_kcs)
+        # [n_hidden,n_hidden] (Target,Source)
+        self.trans_logits = nn.Parameter(th.randn(n_latent_kcs, 2, 2))
+        self.obs_logits = nn.Parameter(th.randn(n_latent_kcs, 2, 2))
+        self.init_logits = nn.Parameter(th.randn(n_latent_kcs, 2))
+
+        self.hmm = layer_multihmmcell.MultiHmmCell()
+
         self.n_kcs = n_kcs
         self.n_latent_kcs = n_latent_kcs
 
@@ -99,9 +106,9 @@ class BktModel(nn.Module):
         
         self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=hard_samples, tau=tau, dim=1)
         
-    def forward(self, corr, kc):
-        actual_kc = self._A[kc]
-        return self.hmm(corr, actual_kc)
+    def forward(self, corr, actual_kc):
+        
+        return self.hmm(corr, actual_kc, self.trans_logits, self.obs_logits, self.init_logits)
 
     def get_params(self):
         alpha = F.softmax(self.hmm.init_logits, dim=1) # n_chains x n_states
@@ -163,7 +170,7 @@ def train(train_seqs, valid_seqs, n_kcs, device, learning_rate, epochs, n_batch_
             final_mask_seq = th.vstack(rep_mask_seqs).to(device)
             mask_ix = final_mask_seq.flatten()
 
-            output = model.hmm(final_obs_seq, final_kc_seq)
+            output = model(final_obs_seq, final_kc_seq)
             
             train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
              
@@ -240,7 +247,8 @@ def predict(model, seqs, n_batch_seqs, device, n_samples):
                 batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
                 batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
 
-                output = model(batch_obs_seqs.to(device), batch_kc_seqs.to(device)).cpu()
+                actual_kc = model._A[batch_kc_seqs.to(device)]
+                output = model(batch_obs_seqs.to(device), actual_kc).cpu()
                     
                 ypred = output[:, :, 1].flatten()
                 ytrue = batch_obs_seqs.flatten()
@@ -379,7 +387,7 @@ if __name__ == "__main__":
         "tau" : 1.5,
         "n_latent_kcs" : 20,
         "lambda" : 0.00,
-        "n_batch_seqs" : 20,
+        "n_batch_seqs" : 200,
         "n_test_batch_seqs" : 500,
         "hard_samples" : False,
         "ref_labels" : None,
