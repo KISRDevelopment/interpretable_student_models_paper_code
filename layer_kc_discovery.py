@@ -14,7 +14,7 @@ class SimpleKCDiscovery(nn.Module):
         
         self.n_problems = n_problems
         self.n_kcs = n_kcs 
-
+        
         self._logits = nn.Parameter(th.randn(n_problems, n_kcs))
 
     def sample_A(self, tau, hard):

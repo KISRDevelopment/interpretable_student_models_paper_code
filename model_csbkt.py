@@ -48,17 +48,7 @@ def main():
     # np.savez(param_output_path, **all_params)
 
 def run(cfg, df, splits):
-    n_problems = np.max(df['problem']) + 1
-    cfg['n_problems'] = n_problems
-
-    print("# of problems: %d, Students: %d" % (n_problems, np.max(df['student'])+1))
-    gdf = df.groupby('problem')['student'].count()
-    lower = np.percentile(gdf, q=2.5)
-    upper = np.percentile(gdf, q=97.5)
-    print("95%% occurance range: %d-%d" % (lower,upper))
-    print("# of problems occuring at least 10 times: %d" % np.sum(gdf >= 10))
     
-
     ref_assignment = get_problem_skill_assignment(df)
 
     if 'problem_feature_mat_path' in cfg:

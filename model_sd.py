@@ -19,6 +19,8 @@ import layer_multihmmcell
 import layer_kc_discovery
 import early_stopping_rules
 import loss_sequence 
+import utils 
+
 def main():
     import sys
 
@@ -37,6 +39,11 @@ def main():
     
     splits = np.load("data/splits/%s.npy" % dataset_name)
     
+
+    # problems occuring less than x times should be assigned
+    if cfg.get('min_problem_freq', 0) > 0:
+        utils.trim_problems(df, cfg['min_problem_freq'])
+    
     cfg['n_problems'] = np.max(df['problem']) + 1
     cfg['device'] = 'cuda:0'
 
@@ -54,13 +61,6 @@ def run(cfg, df, splits):
     
     cfg['ref_labels'] = A
     cfg['n_kcs'] = n_skills
-    
-    print("# of problems: %d" % cfg['n_problems'])
-    gdf = df.groupby('problem')['student'].count()
-    lower = np.percentile(gdf, q=2.5)
-    upper = np.percentile(gdf, q=97.5)
-    print("95%% occurance range: %d-%d" % (lower,upper))
-    print("# of problems occuring at least 10 times: %d" % np.sum(gdf >= 10))
     
     if 'problem_feature_mat_path' in cfg:
         problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
@@ -160,9 +160,11 @@ def train(cfg, train_seqs, valid_seqs):
             mask_ix = mask_ix.flatten()
             train_loss = train_loss[mask_ix].mean() 
 
-            mlogprobs = F.log_softmax(model.kc_discovery.get_logits(), dim=1)
-            aux_loss = loss_sequence.nback_loss(batch_problem_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
-
+            aux_loss = 0
+            if cfg['aux_loss_coeff'] > 0:
+                mlogprobs = F.log_softmax(model.kc_discovery.get_logits(), dim=1)
+                aux_loss = loss_sequence.nback_loss(batch_problem_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
+            
             train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
             optimizer.zero_grad()
             train_loss.backward()
@@ -220,18 +222,12 @@ def predict(cfg, model, seqs):
 
             mask_ix = batch_mask_seqs.flatten()
 
-            # call the model for each A 
-            # all_logpred_correct = []
-            # for A in As:
-            #     logpred = model.forward_test(batch_obs_seqs, batch_problem_seqs, A) # BxTx2
-            #     logpred_correct = logpred[:,:,1].flatten() # B*T
-            #     logpred_correct = logpred_correct[mask_ix]
-            #     all_logpred_correct.append(logpred_correct.cpu())
-            
             logpred = model.forward_test_multisample(batch_obs_seqs, batch_problem_seqs, As) # SxBxTx2
             logpred_correct = logpred[:, :, :, 1] # SxBxT
 
-            final_logpred_correct = th.logsumexp(logpred_correct, dim=0) - np.log(logpred_correct.shape[0]) # BxT
+            #final_logpred_correct = th.logsumexp(logpred_correct, dim=0) - np.log(logpred_correct.shape[0]) # BxT
+            final_logpred_correct = logpred_correct.mean(0)
+            
             final_logpred_correct = final_logpred_correct.flatten()
             final_logpred_correct = final_logpred_correct[mask_ix]
 
@@ -300,29 +296,20 @@ class BktModel(nn.Module):
             kc = A[problem,:] # BxTxK
             final_kc.append(kc)
         
-        kc = th.concat(final_kc, dim=0) # B*S xTxK
-        corr = th.tile(corr, (cfg['n_train_samples'], 1)) # B*S xT
+        kc = th.concat(final_kc, dim=0) # S*BxTxK
+        corr = th.tile(corr, (cfg['n_train_samples'], 1)) # S*B xT
 
         # call BKT
         logpred = self.hmm(corr, kc, trans_logits, obs_logits, init_logits) # B'xTx2
 
         # reshape to make samples available
-        logpred = th.reshape(logpred, (orig_batch_size, -1, logpred.shape[1], logpred.shape[2])) # BxSxTx2
-        corr = th.reshape(corr, (orig_batch_size, -1, corr.shape[1]))
+        logpred = th.reshape(logpred, (-1, orig_batch_size, logpred.shape[1], logpred.shape[2])) # SxBxTx2
+        corr = th.reshape(corr, (-1, orig_batch_size, corr.shape[1]))
+
+        logpred = th.permute(logpred, (1, 0, 2, 3))
+        corr = th.permute(corr, (1, 0, 2))
+
         return logpred, corr 
-
-    
-    def forward_test(self, corr, problem, A):
-        # put BKT parameters into the right format
-        trans_logits, obs_logits, init_logits = get_logits(self._dynamics_logits, self._obs_logits)
-
-        # compute effective KC based on assignemts
-        kc = A[problem,:] # BxTxK
-        
-        # call BKT
-        logpred = self.hmm(corr, kc, trans_logits, obs_logits, init_logits) # BxTx2
-
-        return logpred 
     
     def forward_test_multisample(self, corr, problem, As):
         """

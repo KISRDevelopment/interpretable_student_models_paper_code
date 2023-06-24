@@ -2,7 +2,7 @@ import itertools
 import json
 import numpy as np
 from collections import defaultdict
-
+import pandas as pd 
 def load_json(path):
     with open(path, 'r') as f:
         return json.load(f)
@@ -145,44 +145,80 @@ def prepare_batch(seqs):
     
     return subseqs, max_len
 
+def trim_problems(df, thres):
+    n_problems = np.max(df['problem']) + 1
+    
+    # prepare problem info df
+    problem_counts = pd.DataFrame({ "count" : df.groupby('problem')['student'].count() })
+    problem_skill = pd.DataFrame(set(zip(df['problem'], df['skill'])), columns=['problem', 'skill']).set_index('problem')
+    problem_info = pd.concat((problem_skill, problem_counts), axis=1)
+    problem_info.sort_values('problem', inplace=True)
+    
+    # get problems that occur above thres
+    freq_ix = problem_info['count'] >= thres 
+    print("# eligible problems: %d out of %d" % (np.sum(freq_ix), n_problems))
+
+    # temporarily relabel ineligible problems with their skill label
+    # the skill label will be offset by n_problems to avoid clashing with
+    # problem ids that are eligible
+    orig_to_tmp_id = (freq_ix * problem_info.index + (1-freq_ix) * (problem_info['skill'] + n_problems))
+    unique_problems = np.unique(orig_to_tmp_id)
+    
+    # map from original problem id to new IDs
+    n_max = np.max(unique_problems) + 1
+    tmp_to_new_id = np.zeros(n_max)
+    tmp_to_new_id[unique_problems] = np.arange(unique_problems.shape[0])
+    orig_to_new_id = tmp_to_new_id[orig_to_tmp_id]
+    
+    df['problem'] = orig_to_new_id[df['problem']].astype(int)
+    print("New # of unique problems: %d" % (pd.unique(df['problem']).shape[0]))
+
+    return df
+
 if __name__ == "__main__":
+
+    import pandas as pd 
+    
+    df = pd.read_csv("data/datasets/gervetetal_algebra05.csv")
+    trim_problems(df, 10)
+
     #seqs = [[0, 1, 1, 0], [0, 1]]
 
     #print(pad_to_multiple(seqs, 3, -1))
 
-    import pandas as pd 
+    # import pandas as pd 
 
     #seqs = to_seqs(df)
     
-    seqs = [
-        {
-            "kc" :      np.array([0, 1, 0, 1]),
-            "problem" : np.array([0, 0, 0, 0]),
-            "correct":  np.array([0, 0, 0, 0]),
-        },
-        {
-            "kc" :      np.array([0, 0, 0, 1, 1, 1, 1]),
-            "problem" : np.array([0, 0, 0, 0, 0, 0, 0]),
-            "correct":  np.array([0, 0, 0, 0, 0, 0, 0]),
-        }
-    ]
+    # seqs = [
+    #     {
+    #         "kc" :      np.array([0, 1, 0, 1]),
+    #         "problem" : np.array([0, 0, 0, 0]),
+    #         "correct":  np.array([0, 0, 0, 0]),
+    #     },
+    #     {
+    #         "kc" :      np.array([0, 0, 0, 1, 1, 1, 1]),
+    #         "problem" : np.array([0, 0, 0, 0, 0, 0, 0]),
+    #         "correct":  np.array([0, 0, 0, 0, 0, 0, 0]),
+    #     }
+    # ]
 
-    subseqs, max_len = prepare_batch(seqs)
+    # subseqs, max_len = prepare_batch(seqs)
 
-    print(subseqs)
+    # print(subseqs)
 
-    padded_trial_id = pad_to_multiple([s['trial_id'] for s in subseqs], multiple=8, padding_value=-1)
+    # padded_trial_id = pad_to_multiple([s['trial_id'] for s in subseqs], multiple=8, padding_value=-1)
 
-    print(padded_trial_id)
+    # print(padded_trial_id)
 
-    flattened_trial_id = padded_trial_id.flatten()
+    # flattened_trial_id = padded_trial_id.flatten()
 
-    print(flattened_trial_id)
+    # print(flattened_trial_id)
 
-    # store result
-    valid_trial_id = flattened_trial_id[flattened_trial_id > -1].astype(int)
-    print(valid_trial_id.dtype)
-    result = np.zeros(len(seqs)*max_len)
-    result[valid_trial_id] = 1
+    # # store result
+    # valid_trial_id = flattened_trial_id[flattened_trial_id > -1].astype(int)
+    # print(valid_trial_id.dtype)
+    # result = np.zeros(len(seqs)*max_len)
+    # result[valid_trial_id] = 1
 
-    print(result)
+    # print(result)
