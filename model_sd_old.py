@@ -16,18 +16,20 @@ import sklearn.metrics
 import early_stopping_rules 
 import layer_multihmmcell
 import layer_kc_discovery
-
+import loss_sequence
 class BktModel(nn.Module):
     def __init__(self, cfg):
         super(BktModel, self).__init__()
         
         self.cfg = cfg 
 
-        weight_matrix = th.rand((cfg['n_kcs'], cfg['n_latent_kcs']))
-        weight_matrix[:, cfg['n_initial_kcs']:] = -10
+        # KC Discovery
+        if 'problem_feature_mat' in cfg:
+            self.kc_discovery = layer_kc_discovery.FeaturizedKCDiscovery(cfg['problem_feature_mat'], cfg['n_latent_kcs'])
+        else:
+            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], cfg['n_latent_kcs'], cfg['n_initial_kcs'])
 
-        self.kc_membership_logits = nn.Embedding.from_pretrained(weight_matrix, freeze=False)
-
+        
         # [n_hidden,n_hidden] (Target,Source)
         self.trans_logits = nn.Parameter(th.randn(cfg['n_latent_kcs'], 2, 2))
         self.obs_logits = nn.Parameter(th.randn(cfg['n_latent_kcs'], 2, 2))
@@ -39,7 +41,7 @@ class BktModel(nn.Module):
         
     def sample_A(self, tau, hard_samples):
         
-        self._A = nn.functional.gumbel_softmax(self.kc_membership_logits.weight, hard=hard_samples, tau=tau, dim=1)
+        self._A = self.kc_discovery.sample_A(tau, hard_samples)
     
     def forward(self, corr, actual_kc):
         
@@ -49,7 +51,7 @@ class BktModel(nn.Module):
         alpha = F.softmax(self.init_logits, dim=1) # n_chains x n_states
         obs = F.softmax(self.obs_logits, dim=2) # n_chains x n_states x n_obs
         t = F.softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
-        kc_membership_probs = F.softmax(self.kc_membership_logits.weight, dim=1) # n_problems * n_latent_kcs
+        kc_membership_probs = F.softmax(self.kc_discovery.get_logits(), dim=1) # n_problems * n_latent_kcs
 
         return alpha, obs, t, kc_membership_probs
 
@@ -110,6 +112,12 @@ def train(train_seqs, valid_seqs, cfg):
              
             train_loss = train_loss[mask_ix].mean()
 
+            aux_loss = 0
+            if cfg['aux_loss_coeff'] > 0:
+                mlogprobs = F.log_softmax(model.kc_discovery.get_logits(), dim=1)
+                aux_loss = loss_sequence.nback_loss(batch_kc_seqs.to(cfg['device']), batch_mask_seqs.to(cfg['device']), mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
+            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
+
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
@@ -126,23 +134,6 @@ def train(train_seqs, valid_seqs, cfg):
 
         auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
         
-        # rand_index = 0
-        # n_utilized_kcs = 0
-        # with th.no_grad():
-        #     ref_labels = cfg['ref_labels']
-        #     indecies = []
-        #     n_utilized_kcs = []
-        #     for s in range(100):
-        #         model.sample_A(1e-6, True)
-        #         n_utilized_kcs.append((model._A.sum(0) > 0).sum().cpu().numpy())
-        #         if ref_labels is not None:
-        #             pred_labels = th.argmax(model._A, dim=1).cpu().numpy()
-        #             rand_index = sklearn.metrics.adjusted_rand_score(ref_labels, pred_labels)
-        #             indecies.append(rand_index)
-        #     if ref_labels is not None:
-        #         rand_index = np.mean(indecies)
-        #     n_utilized_kcs = np.mean(n_utilized_kcs)
-
         stop_training, new_best = stopping_rule.log(auc_roc)
 
         print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if new_best else ''))
@@ -201,12 +192,19 @@ def predict(model, seqs, cfg):
     return ytrue, ypred
 
 def main(cfg, df, splits):
-    
-    if cfg['use_problems']:
-        df['skill'] = df['problem']
-        cfg['n_kcs'] = np.max(df['problem']) + 1
-        cfg['device'] = 'cuda:0'
+    cfg['device'] = 'cuda:0'
+    ref_assignment = get_problem_skill_assignment(df)
+    if 'problem_rep_mat_path' in cfg:
+        problem_feature_mat = np.load(cfg['problem_rep_mat_path'])
+        mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
+        std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
+        problem_feature_mat = (problem_feature_mat - mu) / (std+1e-9)
+        cfg['problem_feature_mat'] = th.tensor(problem_feature_mat).float().to(cfg['device'])
 
+    df['skill'] = df['problem']
+    cfg['n_kcs'] = np.max(df['problem']) + 1
+    
+    
     seqs = to_student_sequences(df)
     
     all_ytrue = []
@@ -253,7 +251,7 @@ def main(cfg, df, splits):
         
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         run_result['time_diff_sec'] = toc - tic 
-        
+        run_result['rand_index'] = compare_kc_assignment(model, ref_assignment)
         results.append(run_result)
         all_ytrue.extend(ytrue_test)
         all_ypred.extend(ypred_test)
@@ -270,27 +268,47 @@ def main(cfg, df, splits):
     
     return results_df, dict(all_params)
 
+
+def compare_kc_assignment(model, ref_assignment):
+    with th.no_grad():
+        membership_logits = model.kc_discovery.get_logits().cpu().numpy()
+    pred_assignment = np.argmax(membership_logits, axis=1)
+
+    rand_index = sklearn.metrics.adjusted_rand_score(ref_assignment, pred_assignment)
+
+    return rand_index
+
+def get_problem_skill_assignment(df):
+
+    problems_to_skills = dict(zip(df['problem'], df['skill']))
+    n_problems = np.max(df['problem']) + 1
+    return np.array([problems_to_skills[p] for p in range(n_problems)])
+
 if __name__ == "__main__":
     import sys
 
     dataset_name = sys.argv[1]
     
     cfg = {
-        "learning_rate" : 0.1, 
+        "learning_rate" : 0.5, 
         "epochs" : 20, 
         "es_patience" : 10,
         "es_thres" : 0.01,
         "tau" : 1.5,
         "n_latent_kcs" : 20,
         "lambda" : 0.00,
-        "n_train_batch_seqs" : 200,
+        "n_train_batch_seqs" : 50,
         "n_test_batch_seqs" : 500,
         "hard_train_samples" : False,
         "ref_labels" : None,
         "use_problems" : True,
         "n_initial_kcs" : 5,
-        "n_test_samples" : 50,
-        "n_train_samples" : 1
+        "n_test_samples" : 10,
+        "n_train_samples" : 5,
+        "aux_loss_coeff" : 0,
+        "min_lag" : 1,
+        "max_lag" : 1,
+        "problem_rep_mat_path" : "data/datasets/sd_5.embeddings.npy"
     }
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)

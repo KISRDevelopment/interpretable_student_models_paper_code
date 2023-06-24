@@ -9,13 +9,15 @@ from typing import List
 
 class SimpleKCDiscovery(nn.Module):
 
-    def __init__(self, n_problems, n_kcs):
+    def __init__(self, n_problems, n_kcs, n_initial_kcs):
         super().__init__()
         
         self.n_problems = n_problems
         self.n_kcs = n_kcs 
-        
-        self._logits = nn.Parameter(th.randn(n_problems, n_kcs))
+
+        weight_matrix = th.rand((n_problems, n_kcs))
+        weight_matrix[:, n_initial_kcs:] = -10
+        self._logits = nn.Parameter(weight_matrix)
 
     def sample_A(self, tau, hard):
         return nn.functional.gumbel_softmax(self._logits, hard=hard, tau=tau, dim=1)
