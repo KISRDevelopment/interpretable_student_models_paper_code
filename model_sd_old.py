@@ -17,6 +17,7 @@ import early_stopping_rules
 import layer_multihmmcell
 import layer_kc_discovery
 import loss_sequence
+import utils
 class BktModel(nn.Module):
     def __init__(self, cfg):
         super(BktModel, self).__init__()
@@ -27,33 +28,21 @@ class BktModel(nn.Module):
         if 'problem_feature_mat' in cfg:
             self.kc_discovery = layer_kc_discovery.FeaturizedKCDiscovery(cfg['problem_feature_mat'], cfg['n_latent_kcs'])
         else:
-            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], cfg['n_latent_kcs'], cfg['n_initial_kcs'])
-
-        
-        # [n_hidden,n_hidden] (Target,Source)
-        self.trans_logits = nn.Parameter(th.randn(cfg['n_latent_kcs'], 2, 2))
-        self.obs_logits = nn.Parameter(th.randn(cfg['n_latent_kcs'], 2, 2))
-        self.init_logits = nn.Parameter(th.randn(cfg['n_latent_kcs'], 2))
+            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], cfg['n_latent_kcs'])
 
         self.hmm = layer_multihmmcell.MultiHmmCell()
 
-        self._A = None
-        
-    def sample_A(self, tau, hard_samples):
-        
-        self._A = self.kc_discovery.sample_A(tau, hard_samples)
+    def get_kc_params(self, tau, hard_samples):
+        return self.kc_discovery.get_params(tau, hard_samples)
     
-    def forward(self, corr, actual_kc):
-        
-        return self.hmm(corr, actual_kc, self.trans_logits, self.obs_logits, self.init_logits)
+    def forward(self, corr, actual_kc, trans_logits, obs_logits, init_logits):
+        return self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
 
     def get_params(self):
-        alpha = F.softmax(self.init_logits, dim=1) # n_chains x n_states
-        obs = F.softmax(self.obs_logits, dim=2) # n_chains x n_states x n_obs
-        t = F.softmax(self.trans_logits, dim=1) # n_chains x n_states x n_states
+        params = self.kc_discovery.get_params(1e-6, True)
         kc_membership_probs = F.softmax(self.kc_discovery.get_logits(), dim=1) # n_problems * n_latent_kcs
 
-        return alpha, obs, t, kc_membership_probs
+        return params[1], params[2], params[3], kc_membership_probs
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -81,41 +70,28 @@ def train(train_seqs, valid_seqs, cfg):
         np.random.shuffle(train_seqs)
         losses = []
 
-        prev_n_utilized_kcs = cfg['n_initial_kcs']
         for offset in range(0, len(train_seqs), cfg['n_train_batch_seqs']):
             end = offset + cfg['n_train_batch_seqs']
             batch_seqs = train_seqs[offset:end]
 
-            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
-            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
+            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+            batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
-            rep_obs_seqs = []
-            rep_kc_seqs = []
-            rep_mask_seqs = []
-            rep_utilized_kcs = []
-            for r in range(cfg['n_train_samples']):
-                model.sample_A(cfg['tau'], cfg['hard_train_samples'])
-                actual_kc = model._A[batch_kc_seqs] # B X T X LC
-                rep_obs_seqs.append(batch_obs_seqs)
-                rep_kc_seqs.append(actual_kc)
-                rep_mask_seqs.append(batch_mask_seqs)
-            
-            final_obs_seq = th.vstack(rep_obs_seqs).to(cfg['device'])
-            final_kc_seq = th.vstack(rep_kc_seqs).to(cfg['device'])
-            final_mask_seq = th.vstack(rep_mask_seqs).to(cfg['device'])
-            mask_ix = final_mask_seq.flatten()
+            A, trans_logits, obs_logits, init_logits = model.get_kc_params(cfg['tau'], cfg['hard_train_samples'])
+            actual_kc = A[batch_kc_seqs] # B X T X LC
 
-            output = model(final_obs_seq, final_kc_seq)
+            output = model(batch_obs_seqs, actual_kc, trans_logits, obs_logits, init_logits)
             
-            train_loss = -(final_obs_seq * output[:, :, 1] + (1-final_obs_seq) * output[:, :, 0]).flatten() 
-             
+            train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
+            
+            mask_ix = batch_mask_seqs.flatten()
             train_loss = train_loss[mask_ix].mean()
 
             aux_loss = 0
             if cfg['aux_loss_coeff'] > 0:
                 mlogprobs = F.log_softmax(model.kc_discovery.get_logits(), dim=1)
-                aux_loss = loss_sequence.nback_loss(batch_kc_seqs.to(cfg['device']), batch_mask_seqs.to(cfg['device']), mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
+                aux_loss = loss_sequence.nback_loss(batch_kc_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
             train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
 
             optimizer.zero_grad()
@@ -159,7 +135,7 @@ def predict(model, seqs, cfg):
             sample_ypred = []
             all_ytrue = []
 
-            model.sample_A(1e-6, True)
+            A, trans_logits, obs_logits, init_logits = model.get_kc_params(1e-6, True)
             for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
                 end = offset + cfg['n_test_batch_seqs']
                 batch_seqs = seqs[offset:end]
@@ -168,8 +144,8 @@ def predict(model, seqs, cfg):
                 batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
                 batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
 
-                actual_kc = model._A[batch_kc_seqs.to(cfg['device'])]
-                output = model(batch_obs_seqs.to(cfg['device']), actual_kc).cpu()
+                actual_kc = A[batch_kc_seqs.to(cfg['device'])]
+                output = model(batch_obs_seqs.to(cfg['device']), actual_kc, trans_logits, obs_logits, init_logits).cpu()
                     
                 ypred = output[:, :, 1].flatten()
                 ytrue = batch_obs_seqs.flatten()
@@ -192,7 +168,7 @@ def predict(model, seqs, cfg):
     return ytrue, ypred
 
 def main(cfg, df, splits):
-    cfg['device'] = 'cuda:0'
+    
     ref_assignment = get_problem_skill_assignment(df)
     if 'problem_rep_mat_path' in cfg:
         problem_feature_mat = np.load(cfg['problem_rep_mat_path'])
@@ -287,30 +263,30 @@ def get_problem_skill_assignment(df):
 if __name__ == "__main__":
     import sys
 
-    dataset_name = sys.argv[1]
+    cfg_path = sys.argv[1]
+    dataset_name = sys.argv[2]
+    output_path = sys.argv[3]
     
-    cfg = {
-        "learning_rate" : 0.5, 
-        "epochs" : 20, 
-        "es_patience" : 10,
-        "es_thres" : 0.01,
-        "tau" : 1.5,
-        "n_latent_kcs" : 20,
-        "lambda" : 0.00,
-        "n_train_batch_seqs" : 50,
-        "n_test_batch_seqs" : 500,
-        "hard_train_samples" : False,
-        "ref_labels" : None,
-        "use_problems" : True,
-        "n_initial_kcs" : 5,
-        "n_test_samples" : 10,
-        "n_train_samples" : 5,
-        "aux_loss_coeff" : 0,
-        "min_lag" : 1,
-        "max_lag" : 1,
-        "problem_rep_mat_path" : "data/datasets/sd_5.embeddings.npy"
-    }
+    with open(cfg_path, 'r') as f:
+        cfg = json.load(f)
+
+    if len(sys.argv) > 4:
+        problem_feature_mat_path = sys.argv[4]
+        cfg['problem_feature_mat_path'] = problem_feature_mat_path
 
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+    
     splits = np.load("data/splits/%s.npy" % dataset_name)
+    
+    # problems occuring less than x times should be assigned
+    if cfg.get('min_problem_freq', 0) > 0:
+        utils.trim_problems(df, cfg['min_problem_freq'])
+
+    cfg['device'] = 'cuda:0'
     results_df, all_params = main(cfg, df, splits)
+
+    results_df.to_csv(output_path)
+
+    param_output_path = output_path.replace(".csv", ".params.npy")
+    np.savez(param_output_path, **all_params)
+
