@@ -18,6 +18,7 @@ import layer_multihmmcell
 import layer_kc_discovery
 import loss_sequence
 import utils
+
 class BktModel(nn.Module):
     def __init__(self, cfg):
         super(BktModel, self).__init__()
@@ -29,20 +30,25 @@ class BktModel(nn.Module):
             self.kc_discovery = layer_kc_discovery.FeaturizedKCDiscovery(cfg['problem_feature_mat'], cfg['n_latent_kcs'])
         else:
             self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], cfg['n_latent_kcs'])
+        
+        n_kcs = cfg['n_latent_kcs']
+        self.trans_logits = nn.Parameter(th.randn(n_kcs, 2, 2))
+        self.obs_logits = nn.Parameter(th.randn(n_kcs, 2, 2))
+        self.init_logits = nn.Parameter(th.randn(n_kcs, 2))
 
         self.hmm = layer_multihmmcell.MultiHmmCell()
 
-    def get_kc_params(self, tau, hard_samples):
-        return self.kc_discovery.get_params(tau, hard_samples)
-    
-    def forward(self, corr, actual_kc, trans_logits, obs_logits, init_logits):
-        return self.hmm(corr, actual_kc, trans_logits, obs_logits, init_logits)
+    def sample(self):
+        self._A = self.kc_discovery.sample_A(cfg['tau'], cfg['hard_train_samples'])
+
+    def forward(self, corr, problem):
+        actual_kc = self._A[problem, :]
+        return self.hmm(corr, actual_kc, self.trans_logits, self.obs_logits, self.init_logits)
+
 
     def get_params(self):
-        params = self.kc_discovery.get_params(1e-6, True)
         kc_membership_probs = F.softmax(self.kc_discovery.get_logits(), dim=1) # n_problems * n_latent_kcs
-
-        return params[1], params[2], params[3], kc_membership_probs
+        return self.trans_logits, self.obs_logits, self.init_logits, kc_membership_probs
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -78,10 +84,8 @@ def train(train_seqs, valid_seqs, cfg):
             batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
-            A, trans_logits, obs_logits, init_logits = model.get_kc_params(cfg['tau'], cfg['hard_train_samples'])
-            actual_kc = A[batch_kc_seqs] # B X T X LC
-
-            output = model(batch_obs_seqs, actual_kc, trans_logits, obs_logits, init_logits)
+            model.sample()
+            output = model(batch_obs_seqs, batch_kc_seqs)
             
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
             
@@ -135,24 +139,23 @@ def predict(model, seqs, cfg):
             sample_ypred = []
             all_ytrue = []
 
-            A, trans_logits, obs_logits, init_logits = model.get_kc_params(1e-6, True)
+            model.sample()
             for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
                 end = offset + cfg['n_test_batch_seqs']
                 batch_seqs = seqs[offset:end]
 
-                batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0)
-                batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0)
-                batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1) > -1
+                batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+                batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+                batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1).to(cfg['device']) > -1
 
-                actual_kc = A[batch_kc_seqs.to(cfg['device'])]
-                output = model(batch_obs_seqs.to(cfg['device']), actual_kc, trans_logits, obs_logits, init_logits).cpu()
+                output = model(batch_obs_seqs.to(cfg['device']), batch_kc_seqs)
                     
                 ypred = output[:, :, 1].flatten()
                 ytrue = batch_obs_seqs.flatten()
                 mask_ix = batch_mask_seqs.flatten()
                     
-                ypred = ypred[mask_ix].numpy()
-                ytrue = ytrue[mask_ix].numpy()
+                ypred = ypred[mask_ix].cpu().numpy()
+                ytrue = ytrue[mask_ix].cpu().numpy()
 
                 sample_ypred.append(ypred)
                 all_ytrue.append(ytrue)
