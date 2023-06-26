@@ -21,7 +21,7 @@ def main():
     datasets = [os.path.basename(p).replace('.csv','') for p in 
         glob.glob("data/datasets/sd_*_%s.csv" % variant)]
     datasets = sorted(datasets, key=lambda d: int(d.split('_')[1]))
-
+    
     os.makedirs(output_dir, exist_ok=True)
 
     cfg_name = os.path.basename(cfg_path).replace('.json', '')

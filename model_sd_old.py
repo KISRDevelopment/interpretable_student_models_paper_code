@@ -19,36 +19,63 @@ import layer_kc_discovery
 import loss_sequence
 import utils
 
+@jit.script
+def get_logits(dynamics_logits, obs_logits):
+    """
+        dynamics_logits: chains x 3 (pL, pF, pI0)
+        obs_logits: chains x 2 (pG, pS)
+        Returns:
+            trans_logits, obs_logits, init_logits
+    """
+    trans_logits = th.hstack((dynamics_logits[:, [0]]*0, # 1-pL
+                              dynamics_logits[:, [1]],  # pF
+                              dynamics_logits[:, [0]],  # pL
+                              dynamics_logits[:, [1]]*0)).reshape((-1, 2, 2)) # 1-pF (Latent KCs x 2 x 2)
+    obs_logits = th.concat((obs_logits[:, [0]]*0, # 1-pG
+                            obs_logits[:, [0]],  # pG
+                            obs_logits[:, [1]],  # pS
+                            obs_logits[:, [1]]*0), dim=1).reshape((-1, 2, 2)) # 1-pS (Latent KCs x 2 x 2)
+    init_logits = th.hstack((dynamics_logits[:, [2]]*0, 
+                             dynamics_logits[:, [2]])) # (Latent KCs x 2)
+
+    return trans_logits, obs_logits, init_logits
+
 class BktModel(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, n_kcs):
         super(BktModel, self).__init__()
         
         self.cfg = cfg 
 
         # KC Discovery
         if 'problem_feature_mat' in cfg:
-            self.kc_discovery = layer_kc_discovery.FeaturizedKCDiscovery(cfg['problem_feature_mat'], cfg['n_latent_kcs'])
+            print("Using problem features ...")
+            self.kc_discovery = layer_kc_discovery.FeaturizedKCDiscovery(cfg['problem_feature_mat'], n_kcs)
         else:
-            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], cfg['n_latent_kcs'])
+            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], n_kcs)
         
-        n_kcs = cfg['n_latent_kcs']
-        self.trans_logits = nn.Parameter(th.randn(n_kcs, 2, 2))
-        self.obs_logits = nn.Parameter(th.randn(n_kcs, 2, 2))
-        self.init_logits = nn.Parameter(th.randn(n_kcs, 2))
+        self._dynamics_logits = nn.Parameter(th.randn(n_kcs, 3)) # pL, pF, pI0
+        self._obs_logits = nn.Parameter(th.randn(n_kcs, 2)) # pG, pS
 
         self.hmm = layer_multihmmcell.MultiHmmCell()
-
-    def sample(self):
-        self._A = self.kc_discovery.sample_A(cfg['tau'], cfg['hard_train_samples'])
+    def sample(self, tau, hard):
+        self._A = self.kc_discovery.sample_A(tau, hard)
 
     def forward(self, corr, problem):
         actual_kc = self._A[problem, :]
-        return self.hmm(corr, actual_kc, self.trans_logits, self.obs_logits, self.init_logits)
+        trans_logits, obs_logits, init_logits = get_logits(self._dynamics_logits, self._obs_logits)
 
+        log_obs = F.log_softmax(obs_logits, dim=2)
+        log_t = F.log_softmax(trans_logits, dim=1)
+
+        return self.hmm(corr, actual_kc, log_t, log_obs, init_logits)
+
+    def get_membership_logits(self):
+        return self.kc_discovery.get_logits()
 
     def get_params(self):
         kc_membership_probs = F.softmax(self.kc_discovery.get_logits(), dim=1) # n_problems * n_latent_kcs
-        return self.trans_logits, self.obs_logits, self.init_logits, kc_membership_probs
+        trans_logits, obs_logits, init_logits = get_logits(self._dynamics_logits, self._obs_logits)
+        return trans_logits, obs_logits, init_logits, kc_membership_probs
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -62,7 +89,7 @@ def to_student_sequences(df):
 
 def train(train_seqs, valid_seqs, cfg):
 
-    model = BktModel(cfg)
+    model = BktModel(cfg, cfg['n_latent_kcs'])
     model = model.to(cfg['device'])
     
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
@@ -76,7 +103,8 @@ def train(train_seqs, valid_seqs, cfg):
         np.random.shuffle(train_seqs)
         losses = []
 
-        for offset in range(0, len(train_seqs), cfg['n_train_batch_seqs']):
+        n_seqs = len(train_seqs) if cfg['full_epochs'] else cfg['n_train_batch_seqs']
+        for offset in range(0, n_seqs, cfg['n_train_batch_seqs']):
             end = offset + cfg['n_train_batch_seqs']
             batch_seqs = train_seqs[offset:end]
 
@@ -84,26 +112,31 @@ def train(train_seqs, valid_seqs, cfg):
             batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
             batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
-            model.sample()
+            mask_ix = batch_mask_seqs.flatten()
+            
+            model.sample(cfg['tau'], cfg['hard_train_samples'])
             output = model(batch_obs_seqs, batch_kc_seqs)
             
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
-            
-            mask_ix = batch_mask_seqs.flatten()
             train_loss = train_loss[mask_ix].mean()
 
             aux_loss = 0
             if cfg['aux_loss_coeff'] > 0:
                 mlogprobs = F.log_softmax(model.kc_discovery.get_logits(), dim=1)
                 aux_loss = loss_sequence.nback_loss(batch_kc_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
-            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss
+            
+            kc_counts = model._A.sum(0) # K
+            kc_counts = kc_counts / kc_counts.sum() # K
+            diffs = (kc_counts - 1/kc_counts.shape[0]).abs()
+
+            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss + diffs.mean()
 
             optimizer.zero_grad()
             train_loss.backward()
             optimizer.step()
 
             losses.append(train_loss.item())
-            print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / cfg['n_train_batch_seqs'] )))
+            #print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / cfg['n_train_batch_seqs'] )))
         
         mean_train_loss = np.mean(losses)
 
@@ -120,7 +153,8 @@ def train(train_seqs, valid_seqs, cfg):
         
         if new_best:
             best_state = copy.deepcopy(model.state_dict())
-            
+            best_auc_roc = auc_roc
+
         if stop_training:
             break
 
@@ -139,7 +173,7 @@ def predict(model, seqs, cfg):
             sample_ypred = []
             all_ytrue = []
 
-            model.sample()
+            model.sample(1e-6, True)
             for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
                 end = offset + cfg['n_test_batch_seqs']
                 batch_seqs = seqs[offset:end]
@@ -173,8 +207,8 @@ def predict(model, seqs, cfg):
 def main(cfg, df, splits):
     
     ref_assignment = get_problem_skill_assignment(df)
-    if 'problem_rep_mat_path' in cfg:
-        problem_feature_mat = np.load(cfg['problem_rep_mat_path'])
+    if 'problem_feature_mat_path' in cfg:
+        problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
         mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
         std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
         problem_feature_mat = (problem_feature_mat - mu) / (std+1e-9)
@@ -210,8 +244,6 @@ def main(cfg, df, splits):
         valid_seqs = [seqs[s] for s in valid_students]
         test_seqs = [seqs[s] for s in test_students]
 
-        n_kcs = int(np.max(df['skill']) + 1)
-
         tic = time.perf_counter()
 
         model = train(train_seqs, valid_seqs, cfg)
@@ -230,6 +262,7 @@ def main(cfg, df, splits):
         
         run_result = metrics.calculate_metrics(ytrue_test, ypred_test)
         run_result['time_diff_sec'] = toc - tic 
+        
         run_result['rand_index'] = compare_kc_assignment(model, ref_assignment)
         results.append(run_result)
         all_ytrue.extend(ytrue_test)
@@ -250,7 +283,7 @@ def main(cfg, df, splits):
 
 def compare_kc_assignment(model, ref_assignment):
     with th.no_grad():
-        membership_logits = model.kc_discovery.get_logits().cpu().numpy()
+        membership_logits = model.get_membership_logits().cpu().numpy()
     pred_assignment = np.argmax(membership_logits, axis=1)
 
     rand_index = sklearn.metrics.adjusted_rand_score(ref_assignment, pred_assignment)
@@ -290,6 +323,6 @@ if __name__ == "__main__":
 
     results_df.to_csv(output_path)
 
-    param_output_path = output_path.replace(".csv", ".params.npy")
-    np.savez(param_output_path, **all_params)
+    # param_output_path = output_path.replace(".csv", ".params.npy")
+    # np.savez(param_output_path, **all_params)
 

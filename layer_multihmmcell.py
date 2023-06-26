@@ -16,35 +16,33 @@ class MultiHmmCell(jit.ScriptModule):
     @jit.script_method
     def forward(self, obs: Tensor, 
         chain: Tensor, 
-        trans_logits: Tensor, 
-        obs_logits: Tensor, 
+        log_trans: Tensor, 
+        log_obs: Tensor, 
         init_logits: Tensor) -> Tensor:
 
         n_batch = obs.shape[0]
         log_alpha = F.log_softmax(init_logits, dim=1) # n_chains x n_states
         log_alpha = th.tile(log_alpha, (n_batch, 1, 1)) # batch x chains x states
-        return self.forward_given_alpha(obs, chain, trans_logits, obs_logits, init_logits, log_alpha)[0]
+        return self.forward_given_alpha(obs, chain, log_trans, log_obs, log_alpha)[0]
     
     @jit.script_method
     def forward_given_alpha(self, obs: Tensor, chain: Tensor, 
-        trans_logits: Tensor, 
-        obs_logits: Tensor, 
-        init_logits: Tensor,
+        log_t: Tensor, 
+        log_obs: Tensor, 
         log_alpha: Tensor) -> Tuple[Tensor, Tensor]:
         """
             Input:
                 obs: [n_batch, t]
                 chain: [n_batch, t, n_chains]
-                trans_logits: [n_chains, n_states, n_states] (Target, Source)
-                obs_logits: [n_chains, n_states, n_outputs]
-                init_logits: [n_chains, n_states]
+                log_trans: [n_chains, n_states, n_states] (Target, Source)
+                log_obs: [n_chains, n_states, n_outputs]
                 log_alpha: [n_batch, n_chains, n_states]
             output:
                 logits: [n_batch, t, n_outputs]
                 log_alpha: [n_batch, n_chains, n_states]
         """
 
-        n_chains, n_states, n_outputs = obs_logits.shape 
+        n_chains, n_states, n_outputs = log_obs.shape 
 
         outputs = th.jit.annotate(List[Tensor], [])
         
@@ -52,8 +50,8 @@ class MultiHmmCell(jit.ScriptModule):
         batch_idx = th.arange(n_batch)
 
         
-        log_obs = F.log_softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
-        log_t = F.log_softmax(trans_logits, dim=1) # n_chains x n_states x n_states
+        #log_obs = F.log_softmax(obs_logits, dim=2) # n_chains x n_states x n_obs
+        #log_t = F.log_softmax(trans_logits, dim=1) # n_chains x n_states x n_states
         
         # B X C X S
         for i in range(0, obs.shape[1]):

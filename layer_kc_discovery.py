@@ -7,6 +7,32 @@ import torch.jit as jit
 from torch import Tensor
 from typing import List
 
+
+# class AltSimpleKCDiscovery(nn.Module):
+
+#     def __init__(self, n_problems, n_kcs, device):
+#         super().__init__()
+        
+#         self.n_problems = n_problems
+#         self.n_kcs = n_kcs 
+
+#         self.logit_exp_vals = nn.Parameter(th.randn(n_problems)) # P
+#         self.log_gamma = nn.Parameter(th.randn(n_problems)) # P
+#         self.bins = th.arange(n_kcs).to(device) # K
+        
+#     def sample_A(self, tau, hard):
+#         logits = self.get_logits()
+#         return nn.functional.gumbel_softmax(logits, hard=hard, tau=tau, dim=1)
+
+#     def get_logits(self):
+#         # Px1 - 1xK = PxK
+#         exp_vals = self.logit_exp_vals[:,None].sigmoid()*self.n_kcs
+        
+#         diffs = (exp_vals - self.bins[None,:]).abs()
+#         logits = -self.log_gamma.exp()[:,None] * diffs # PxK
+        
+#         return logits 
+
 class SimpleKCDiscovery(nn.Module):
 
     def __init__(self, n_problems, n_kcs):
@@ -15,8 +41,8 @@ class SimpleKCDiscovery(nn.Module):
         self.n_problems = n_problems
         self.n_kcs = n_kcs 
 
-        weight_matrix = th.randn((n_problems, n_kcs))
-        self._logits = nn.Parameter(weight_matrix)
+        logits = th.randn((n_problems, n_kcs))
+        self._logits = nn.Parameter(logits)
 
     def sample_A(self, tau, hard):
         return nn.functional.gumbel_softmax(self._logits, hard=hard, tau=tau, dim=1)
