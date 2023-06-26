@@ -24,6 +24,19 @@ def load_results(path):
         df['model'] = model 
         df['dataset'] = dataset 
 
+        if model == 'sd':
+            params_file = file.replace('.csv', '.params.npy.npz')
+            
+            d = np.load(params_file)
+            Aprior = d['Aprior']
+            pred_assignments = np.argmax(Aprior, axis=2)
+            ns_unique_kcs = []
+            for i in range(pred_assignments.shape[0]):
+                unique_kcs = np.unique(pred_assignments[i, :])
+                ns_unique_kcs.append(len(unique_kcs))
+            
+            df['mean_n_unique_kcs'] = np.mean(ns_unique_kcs)
+
         dfs.append(df)
     
     df = pd.concat(dfs, axis=0, ignore_index=True)

@@ -57,11 +57,12 @@ class BktModel(nn.Module):
         self._obs_logits = nn.Parameter(th.randn(n_kcs, 2)) # pG, pS
 
         self.hmm = layer_multihmmcell.MultiHmmCell()
+    
     def sample(self, tau, hard):
-        self._A = self.kc_discovery.sample_A(tau, hard)
+        return self.kc_discovery.sample_A(tau, hard)
 
-    def forward(self, corr, problem):
-        actual_kc = self._A[problem, :]
+    def forward(self, corr, actual_kc):
+        #actual_kc = A[problem, :]
         trans_logits, obs_logits, init_logits = get_logits(self._dynamics_logits, self._obs_logits)
 
         log_obs = F.log_softmax(obs_logits, dim=2)
@@ -90,6 +91,7 @@ def to_student_sequences(df):
 def train(train_seqs, valid_seqs, cfg):
 
     model = BktModel(cfg, cfg['n_latent_kcs'])
+
     model = model.to(cfg['device'])
     
     optimizer = th.optim.NAdam(model.parameters(), lr=cfg['learning_rate'])
@@ -103,8 +105,8 @@ def train(train_seqs, valid_seqs, cfg):
         np.random.shuffle(train_seqs)
         losses = []
 
-        n_seqs = len(train_seqs) if cfg['full_epochs'] else cfg['n_train_batch_seqs']
-        for offset in range(0, n_seqs, cfg['n_train_batch_seqs']):
+        done = False
+        for offset in range(0, len(train_seqs), cfg['n_train_batch_seqs']):
             end = offset + cfg['n_train_batch_seqs']
             batch_seqs = train_seqs[offset:end]
 
@@ -114,8 +116,8 @@ def train(train_seqs, valid_seqs, cfg):
             
             mask_ix = batch_mask_seqs.flatten()
             
-            model.sample(cfg['tau'], cfg['hard_train_samples'])
-            output = model(batch_obs_seqs, batch_kc_seqs)
+            A = model.sample(cfg['tau'], cfg['hard_train_samples'])
+            output = model(batch_obs_seqs, A[batch_kc_seqs, :])
             
             train_loss = -(batch_obs_seqs * output[:, :, 1] + (1-batch_obs_seqs) * output[:, :, 0]).flatten() 
             train_loss = train_loss[mask_ix].mean()
@@ -125,11 +127,7 @@ def train(train_seqs, valid_seqs, cfg):
                 mlogprobs = F.log_softmax(model.kc_discovery.get_logits(), dim=1)
                 aux_loss = loss_sequence.nback_loss(batch_kc_seqs, batch_mask_seqs, mlogprobs, np.arange(cfg['min_lag'], cfg['max_lag']+1))
             
-            kc_counts = model._A.sum(0) # K
-            kc_counts = kc_counts / kc_counts.sum() # K
-            diffs = (kc_counts - 1/kc_counts.shape[0]).abs()
-
-            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss + diffs.mean()
+            train_loss = train_loss + cfg['aux_loss_coeff'] * aux_loss 
 
             optimizer.zero_grad()
             train_loss.backward()
@@ -137,72 +135,90 @@ def train(train_seqs, valid_seqs, cfg):
 
             losses.append(train_loss.item())
             #print("%d out of %d" % (len(losses), np.ceil(len(train_seqs) / cfg['n_train_batch_seqs'] )))
-        
-        mean_train_loss = np.mean(losses)
 
-        #
-        # Validation
-        #
-        ytrue, ypred = predict(model, valid_seqs, cfg)
+            if not cfg['full_epochs'] or (end >= len(train_seqs)):
+                
+                mean_train_loss = np.mean(losses)
+                losses = []
+                #
+                # Validation
+                #
+                ytrue, ypred = predict(model, valid_seqs, cfg)
 
-        auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
-        
-        stop_training, new_best = stopping_rule.log(auc_roc)
+                auc_roc = metrics.calculate_metrics(ytrue, ypred)['auc_roc']
+                
+                stop_training, new_best = stopping_rule.log(auc_roc)
 
-        print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if new_best else ''))
-        
-        if new_best:
-            best_state = copy.deepcopy(model.state_dict())
-            best_auc_roc = auc_roc
+                print("%4d Train loss: %8.4f, Valid AUC: %0.2f %s" % (e, mean_train_loss, auc_roc, '***' if new_best else ''))
+                
+                if new_best:
+                    best_state = copy.deepcopy(model.state_dict())
+                    best_auc_roc = auc_roc
 
-        if stop_training:
-            break
-
+                if stop_training:
+                    done = True
+                    break
+        if done:
+            break 
+    
     model.load_state_dict(best_state)
 
     return model
     
 
 def predict(model, seqs, cfg):
+    
     model.eval()
     seqs = sorted(seqs, key=lambda s: len(s), reverse=True)
     with th.no_grad():
 
-        all_ypred = []
-        for sample in range(cfg['n_test_samples']):
-            sample_ypred = []
-            all_ytrue = []
+        # draw sample assignments
+        As = [model.sample(1e-6, True)[None,:,:] for i in range(cfg['n_test_samples'])]
+        As = th.vstack(As) # SxPxK
+        
+        #print("Sampled")
 
-            model.sample(1e-6, True)
-            for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
-                end = offset + cfg['n_test_batch_seqs']
-                batch_seqs = seqs[offset:end]
+        # go over batches
+        batch_logpred_correct = []
+        batch_corr = []
+        for offset in range(0, len(seqs), cfg['n_test_batch_seqs']):
+            end = offset + cfg['n_test_batch_seqs']
+            batch_seqs = seqs[offset:end]
 
-                batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
-                batch_kc_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
-                batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1).to(cfg['device']) > -1
+            batch_obs_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+            batch_problem_seqs = pad_sequence([th.tensor(s['kc']) for s in batch_seqs], batch_first=True, padding_value=0).to(cfg['device'])
+            batch_mask_seqs = pad_sequence([th.tensor(s['obs']) for s in batch_seqs], batch_first=True, padding_value=-1).to(cfg['device']) > -1
 
-                output = model(batch_obs_seqs.to(cfg['device']), batch_kc_seqs)
-                    
-                ypred = output[:, :, 1].flatten()
-                ytrue = batch_obs_seqs.flatten()
-                mask_ix = batch_mask_seqs.flatten()
-                    
-                ypred = ypred[mask_ix].cpu().numpy()
-                ytrue = ytrue[mask_ix].cpu().numpy()
+            mask_ix = batch_mask_seqs.flatten()
 
-                sample_ypred.append(ypred)
-                all_ytrue.append(ytrue)
-                
-            sample_ypred = np.hstack(sample_ypred)
-            ytrue = np.hstack(all_ytrue)
+            # call model
+            tiled_batch_obs_seqs = th.tile(batch_obs_seqs, (cfg['n_test_samples'], 1)) # S*BxT
+            B, T, K = batch_obs_seqs.shape[0], batch_obs_seqs.shape[1], As.shape[2]
+            actual_kc_seqs = As[:, batch_problem_seqs, :].view(-1, T, K) # S*BxTxK
+            logpred = model(tiled_batch_obs_seqs, actual_kc_seqs) # S*BxTx2
+            logpred_correct = logpred[:, :, 1] # S*BxT
+            logpred_correct = logpred_correct.view(-1, B, T) # SxBxT
+            logpred_correct = logpred_correct.mean(0) # BxT
+
+            #final_logpred_correct = th.logsumexp(logpred_correct, dim=0) - np.log(logpred_correct.shape[0]) # BxT
+            #final_logpred_correct = logpred_correct.mean(0)
             
-            all_ypred.append(sample_ypred)
-        ypred = np.mean(np.vstack(all_ypred), axis=0)
+            logpred_correct = logpred_correct.flatten()
+            logpred_correct = logpred_correct[mask_ix]
 
+            batch_logpred_correct.append(logpred_correct.cpu().numpy())
+
+            # get actual observations
+            corr = batch_obs_seqs.flatten() 
+            corr = corr[mask_ix] # Nb
+            batch_corr.append(corr.cpu().numpy())
+        
+        # concatenate everything
+        logpred = np.hstack(batch_logpred_correct)
+        ytrue = np.hstack(batch_corr)
     model.train()
-
-    return ytrue, ypred
+    
+    return ytrue, logpred
 
 def main(cfg, df, splits):
     
@@ -280,7 +296,6 @@ def main(cfg, df, splits):
     
     return results_df, dict(all_params)
 
-
 def compare_kc_assignment(model, ref_assignment):
     with th.no_grad():
         membership_logits = model.get_membership_logits().cpu().numpy()
@@ -316,6 +331,7 @@ if __name__ == "__main__":
     
     # problems occuring less than x times should be assigned
     if cfg.get('min_problem_freq', 0) > 0:
+        print("Trimming problems")
         utils.trim_problems(df, cfg['min_problem_freq'])
 
     cfg['device'] = 'cuda:0'
@@ -323,6 +339,6 @@ if __name__ == "__main__":
 
     results_df.to_csv(output_path)
 
-    # param_output_path = output_path.replace(".csv", ".params.npy")
-    # np.savez(param_output_path, **all_params)
+    param_output_path = output_path.replace(".csv", ".params.npy")
+    np.savez(param_output_path, **all_params)
 
