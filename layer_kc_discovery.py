@@ -35,13 +35,14 @@ from typing import List
 
 class SimpleKCDiscovery(nn.Module):
 
-    def __init__(self, n_problems, n_kcs):
+    def __init__(self, n_problems, n_kcs, initial_kcs):
         super().__init__()
         
         self.n_problems = n_problems
         self.n_kcs = n_kcs 
 
         logits = th.randn((n_problems, n_kcs))
+        logits[:,initial_kcs:] = -10
         self._logits = nn.Parameter(logits)
 
     def sample_A(self, tau, hard):

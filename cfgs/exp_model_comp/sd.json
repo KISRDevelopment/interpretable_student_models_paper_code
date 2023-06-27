@@ -2,18 +2,17 @@
     "script" : "model_sd_old.py",
     "learning_rate" : 0.1, 
     "epochs" : 100, 
+    "full_epochs" : true,
     "es_patience" : 10,
-    "es_thres" : 0.01,
-    "tau" : 0.5,
+    "es_thres" : 0.00,
+    "tau" : 1.5,
     "n_latent_kcs" : 20,
-    "n_train_batch_seqs" : 50,
+    "n_train_batch_seqs" : 100,
     "n_test_batch_seqs" : 500,
     "hard_train_samples" : false,
-    "n_initial_kcs" : 1,
     "n_test_samples" : 10,
-    "n_train_samples" : 5,
     "aux_loss_coeff" : 0,
     "min_lag" : 1,
     "max_lag" : 1,
-    "min_problem_freq" : 10
+    "initial_kcs" : 5
 }

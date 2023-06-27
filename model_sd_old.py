@@ -51,7 +51,7 @@ class BktModel(nn.Module):
             print("Using problem features ...")
             self.kc_discovery = layer_kc_discovery.FeaturizedKCDiscovery(cfg['problem_feature_mat'], n_kcs)
         else:
-            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], n_kcs)
+            self.kc_discovery = layer_kc_discovery.SimpleKCDiscovery(cfg['n_kcs'], n_kcs, cfg['initial_kcs'])
         
         self._dynamics_logits = nn.Parameter(th.randn(n_kcs, 3)) # pL, pF, pI0
         self._obs_logits = nn.Parameter(th.randn(n_kcs, 2)) # pG, pS
@@ -219,6 +219,7 @@ def predict(model, seqs, cfg):
     model.train()
     
     return ytrue, logpred
+
 
 def main(cfg, df, splits):
     

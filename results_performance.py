@@ -3,13 +3,6 @@ import pandas as pd
 import glob 
 import os 
 
-MODEL_NAMES = {
-    'bkt-brute-force' : 'Brute Force',
-    'bkt' : 'BKT RNN',
-    'fbkt' : 'BKT RNN Hybrid',
-    'ref-bkt': 'hmm-scalable'
-}
-
 def main(path, output_path):
 
     df = load_results(path)

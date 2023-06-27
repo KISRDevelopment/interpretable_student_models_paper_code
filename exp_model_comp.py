@@ -19,6 +19,8 @@ datasets = sorted([
 def main():
     cfg_path = sys.argv[1]
     output_dir = sys.argv[2]
+    if len(sys.argv) > 3:
+        datasets = [sys.argv[3]]
 
     os.makedirs(output_dir, exist_ok=True)
 
