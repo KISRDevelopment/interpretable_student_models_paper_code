@@ -1,11 +1,11 @@
 {
     "script" : "model_bkt_irt.py",
     "bkt_module" : "fbkt",
-    "fastbkt_n" : 5,
+    "fastbkt_n" : 4,
     "learning_rate" : 0.5, 
     "epochs" : 100, 
     "patience" : 10,
-    "n_train_batch_seqs" : 100,
+    "n_train_batch_seqs" : 200,
     "n_test_batch_seqs" : 500,
     "es_patience" : 10,
     "es_thres" : 0.01,
