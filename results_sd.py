@@ -24,7 +24,7 @@ def load_results(path):
         df['model'] = model 
         df['dataset'] = dataset 
 
-        if model == 'sd':
+        if model.startswith('sd'):
             params_file = file.replace('.csv', '.params.npy.npz')
             
             d = np.load(params_file)
