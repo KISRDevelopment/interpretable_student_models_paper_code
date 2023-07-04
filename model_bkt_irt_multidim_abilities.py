@@ -263,16 +263,17 @@ class BktModel(nn.Module):
         self._device = cfg['device'] 
 
         # cross the ability levels for two dim abilities
-        ability_levels = list(itertools.product(cfg['ability_levels'], cfg['ability_levels'], cfg['ability_levels']))
-        self.ability_levels = th.tensor(ability_levels).to(cfg['device']) # Ax3
-        self.ability_index = th.arange(self.ability_levels.shape[0]).long().to(cfg['device']) # A 
+        #ability_levels = np.linspace(cfg['ability_levels_min'], cfg['ability_levels_max'], cfg['n_ability_levels'])
+        #ability_levels = list(itertools.product(ability_levels, ability_levels))
 
-        print("# of abilities: %d" % self.ability_levels.shape[0])
-        #print(self.ability_levels)
+        #self.ability_levels = th.tensor(ability_levels).float().to(cfg['device']) # Ax2
+        #self.ability_index = th.arange(self.ability_levels.shape[0]).long().to(cfg['device']) # A 
 
+        self.student_prototypes = nn.Parameter(th.randn(cfg['n_student_prototypes'], 4)) # Ax4
+        self.prototype_index = th.arange(cfg['n_student_prototypes']).long().to(cfg['device']) # A
     def forward(self, seqs, ytrue):
         orig_batch_size = len(seqs)
-        n_ability_levels = self.ability_levels.shape[0]
+        n_ability_levels = self.student_prototypes.shape[0]
 
         # prepare the batch
         #tic = time.perf_counter()
@@ -300,8 +301,8 @@ class BktModel(nn.Module):
         #   Sequence    1       2       3       ... 1       2       3   ...
         #   Ability     0       0       0       ... 1       1       1   ...
         #
-        ability_index = th.repeat_interleave(self.ability_index, kc.shape[0]) # B'
-        ability_level = th.repeat_interleave(self.ability_levels, kc.shape[0], dim=0) # B'x3
+        ability_index = th.repeat_interleave(self.prototype_index, kc.shape[0]) # B'
+        ability_level = th.repeat_interleave(self.student_prototypes, kc.shape[0], dim=0) # B'x4
         
         padded_trial_id = th.tile(padded_trial_id, (n_ability_levels, 1)) # B'xT
         padded_problem = th.tile(padded_problem, (n_ability_levels, 1)) # B'xT
@@ -349,7 +350,7 @@ class BktModel(nn.Module):
                 corr: trial correctness     BxT
                 kc: kc membership (long)    B
                 problem: problem ids (long) BxT
-                ability_level: (float)      Bx2
+                ability_level: (float)      Bx4
             Returns:
                 logprob_pred: log probability of correctness BxTx2
         """
@@ -359,14 +360,15 @@ class BktModel(nn.Module):
         obs_logits_problem = self.obs_logits_problem[problem, :] # BxTx2
         obs_logits = obs_logits_kc[:,None,:] + obs_logits_problem # BxTx2
 
+
         # adjust observation probabilities to account for student ability
         obs_logits[:, :, 0] = ability_level[:, [0]] + obs_logits[:, :, 0] # greater ability -> greater prob of guessing
-        obs_logits[:, :, 1] = obs_logits[:, :, 1] - ability_level[:, [0]] # greater ability -> smaller prob of slipping
+        obs_logits[:, :, 1] = obs_logits[:, :, 1] - ability_level[:, [1]] # greater ability -> smaller prob of slipping
 
         # adjust dynamics probabilities to account for student ability
         
-        dynamics_logits[:, 0] = dynamics_logits[:, 0] + ability_level[:, 1] 
-        dynamics_logits[:, 1] = dynamics_logits[:, 1] - ability_level[:, 2]
+        dynamics_logits[:, 0] = dynamics_logits[:, 0] + ability_level[:, 2] 
+        dynamics_logits[:, 1] = dynamics_logits[:, 1] - ability_level[:, 3]
 
         logprob_pred = self._bkt_module(corr, dynamics_logits, obs_logits)
         return logprob_pred
