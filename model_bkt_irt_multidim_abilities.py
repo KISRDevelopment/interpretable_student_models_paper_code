@@ -31,10 +31,7 @@ def main():
     cfg_path = sys.argv[1]
     dataset_name = sys.argv[2]
     output_path = sys.argv[3]
-    gather_posteriors = False
-    if len(sys.argv) > 4:
-        gather_posteriors = sys.argv[4] == '1'
-    
+
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
     
@@ -52,20 +49,17 @@ def main():
     cfg['n_problems'] = np.max(df['problem']) + 1
     cfg['device'] = 'cuda:0'
 
-    results_df, all_params, cv_posteriors = run(cfg, df, splits, gather_posteriors) 
+    results_df, all_params, model_state_dicts = run(cfg, df, splits) 
     results_df.to_csv(output_path)
 
     param_output_path = output_path.replace(".csv", ".params.npy")
     np.savez(param_output_path, **all_params)
 
-    if gather_posteriors:
-        for s in range(splits.shape[0]):
-            posteriors = cv_posteriors['test_posteriors'][s]
-            seq_lens = cv_posteriors['test_seq_lens'][s]
-            posterior_output_path = output_path.replace('.csv', "%d.posteriors.npz" % s)
-            np.savez(posterior_output_path, posteriors=posteriors, seq_lens=seq_lens)
+    state_dict_output_path = output_path.replace(".csv", ".state_dicts")
+    model_state_dicts = { i: sd for i, sd in enumerate(model_state_dicts) }
+    th.save(model_state_dicts, state_dict_output_path)
     
-def run(cfg, df, splits, gather_posteriors):
+def run(cfg, df, splits):
 
     lens = df.groupby('student')['problem'].count()
     print("Min, median, max sequence length: ", (np.min(lens), np.median(lens), np.max(lens)))
@@ -74,7 +68,7 @@ def run(cfg, df, splits, gather_posteriors):
     
     results = []
     all_params = defaultdict(list)
-    cv_posteriors = defaultdict(list)
+    model_state_dicts = []
 
     for s in range(splits.shape[0]):
         split = splits[s, :]
@@ -98,10 +92,7 @@ def run(cfg, df, splits, gather_posteriors):
         # Train & Test
         tic = time.perf_counter()
         model = train(cfg, train_seqs, valid_seqs)
-        if gather_posteriors:
-            ytrue, log_ypred_correct, posteriors, seq_lens = predict(cfg, model, test_seqs, True)
-        else:
-            ytrue, log_ypred_correct = predict(cfg, model, test_seqs)
+        ytrue, log_ypred_correct = predict(cfg, model, test_seqs)
         toc = time.perf_counter()
 
         ypred_correct = np.exp(log_ypred_correct)
@@ -116,17 +107,14 @@ def run(cfg, df, splits, gather_posteriors):
             all_params['obs_logits_kc'].append(model.obs_logits_kc.cpu().numpy())
             all_params['obs_logits_problem'].append(model.obs_logits_problem.cpu().numpy())
             all_params['student_prototypes'].append(model.student_prototypes.cpu().numpy())
-
-            if gather_posteriors:
-                cv_posteriors['test_posteriors'].append(posteriors)
-                cv_posteriors['test_seq_lens'].append(np.array([len(s['kc']) for s in test_seqs]))
-
+        
+        model_state_dicts.append(copy.deepcopy(model.state_dict()))
         print(run_result)
         
     results_df = pd.DataFrame(results, index=["Split %d" % s for s in range(splits.shape[0])])
     print(results_df)
     
-    return results_df, all_params, cv_posteriors
+    return results_df, all_params, model_state_dicts
 
 def train(cfg, train_seqs, valid_seqs):
     
@@ -159,7 +147,7 @@ def train(cfg, train_seqs, valid_seqs):
             mask = pad_sequence(corr_seqs, batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
             #tic = time.perf_counter()
-            output, _ = model(batch_seqs, ytrue) # OxMx2
+            output = model(batch_seqs, ytrue) # OxMx2
             #toc = time.perf_counter()
             # print("Model call: %f secs" % (toc - tic))
             
@@ -208,16 +196,11 @@ def train(cfg, train_seqs, valid_seqs):
     return model
 
         
-def predict(cfg, model, seqs, gather_posteriors=False):
+def predict(cfg, model, seqs):
 
     seqs = sorted(seqs, reverse=True, key=lambda s: len(s['kc']))
     
     model.eval()
-    max_seq_len = len(seqs[0]['kc'])
-    
-    if gather_posteriors:
-        all_posteriors = np.zeros((len(seqs), cfg['n_student_prototypes'], max_seq_len))
-    
     with th.no_grad():
         all_ypred = []
         all_ytrue = []
@@ -229,7 +212,7 @@ def predict(cfg, model, seqs, gather_posteriors=False):
             ytrue = pad_sequence([th.tensor(s['correct']) for s in batch_seqs], batch_first=True, padding_value=0).float().to(cfg['device'])
             mask = pad_sequence([th.tensor(s['correct']) for s in batch_seqs],batch_first=True, padding_value=-1).to(cfg['device']) > -1
             
-            output, posteriors = model(batch_seqs, ytrue) # OxMx2
+            output = model(batch_seqs, ytrue) # OxMx2
             
             ypred = output[:, :, 1].flatten()
             ytrue = ytrue.flatten()
@@ -241,20 +224,11 @@ def predict(cfg, model, seqs, gather_posteriors=False):
             all_ypred.append(ypred)
             all_ytrue.append(ytrue)
             
-            if gather_posteriors:
-                posteriors = posteriors.cpu().numpy()
-                all_posteriors[offset:end, :, :posteriors.shape[-1]] = posteriors
-                
-        
         ypred = np.hstack(all_ypred)
         ytrue = np.hstack(all_ytrue)
-
     model.train()
     
-    if gather_posteriors:
-        seq_lens = [len(s['kc']) for s in seqs]
-        return ytrue, ypred, all_posteriors, np.array(seq_lens)
-    return ytrue, ypred 
+    return ytrue, ypred
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: defaultdict(list))
@@ -371,9 +345,9 @@ class BktModel(nn.Module):
         result = th.concat((logprob_pred0[:,:,:,None], logprob_pred1[:,:,:,None]), dim=3) # OxAxMx2
         result = th.permute(result, (1, 0, 2, 3))
 
-        logpred, posteriors = layer_seq_bayesian.seq_bayesian(result, ytrue)
+        logpred, _ = layer_seq_bayesian.seq_bayesian(result, ytrue)
 
-        return logpred, posteriors
+        return logpred
 
 
     def forward_(self, corr, kc, problem, ability_level):
