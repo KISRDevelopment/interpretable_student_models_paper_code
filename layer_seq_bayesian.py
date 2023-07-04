@@ -39,7 +39,7 @@ def seq_bayesian(logpred, ytrue):
     # normalize BxTx2
     normed_preds = unnormed_preds - th.logsumexp(unnormed_preds, dim=2)[:,:,None]
 
-    return normed_preds, posteriors[:,:,-1] # BxA
+    return normed_preds, posteriors # BxAxT
 
 def main():
 
@@ -64,6 +64,7 @@ def main():
 
     print(final_logpred.exp())
 
+    alpha_posterior = alpha_posterior[:,:,-1]
     alpha_logposterior = alpha_posterior - th.logsumexp(alpha_posterior, dim=1)[:,None] # BxA
 
     print(alpha_logposterior.exp())
