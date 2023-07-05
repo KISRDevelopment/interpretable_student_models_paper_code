@@ -277,7 +277,7 @@ class BktModel(nn.Module):
 
         self.student_prototypes = nn.Parameter(th.randn(cfg['n_student_prototypes'], 4)) # Ax4
         self.prototype_index = th.arange(cfg['n_student_prototypes']).long().to(cfg['device']) # A
-    def forward(self, seqs, ytrue):
+    def forward(self, seqs, ytrue, return_posteriors=False):
         orig_batch_size = len(seqs)
         n_ability_levels = self.student_prototypes.shape[0]
 
@@ -345,10 +345,12 @@ class BktModel(nn.Module):
         result = th.concat((logprob_pred0[:,:,:,None], logprob_pred1[:,:,:,None]), dim=3) # OxAxMx2
         result = th.permute(result, (1, 0, 2, 3))
 
-        logpred, _ = layer_seq_bayesian.seq_bayesian(result, ytrue)
+        logpred, posteriors = layer_seq_bayesian.seq_bayesian(result, ytrue)
 
-        return logpred
-
+        if return_posteriors:
+            return logpred, posteriors
+        else:
+            return logpred
 
     def forward_(self, corr, kc, problem, ability_level):
         """
@@ -356,7 +358,7 @@ class BktModel(nn.Module):
                 corr: trial correctness     BxT
                 kc: kc membership (long)    B
                 problem: problem ids (long) BxT
-                ability_level: (float)      Bx4
+                ability_level: (float)      Bx4 (Guessing, Not Slipping, Learning, Not Forgetting)
             Returns:
                 logprob_pred: log probability of correctness BxTx2
         """
