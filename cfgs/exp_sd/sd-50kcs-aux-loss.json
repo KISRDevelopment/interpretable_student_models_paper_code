@@ -1,0 +1,18 @@
+{
+    "script" : "model_sd_old.py",
+    "learning_rate" : 0.1, 
+    "epochs" : 100, 
+    "full_epochs" : true,
+    "es_patience" : 10,
+    "es_thres" : 0.00,
+    "tau" : 1.5,
+    "initial_kcs" : 50,
+    "n_latent_kcs" : 50,
+    "n_train_batch_seqs" : 100,
+    "n_test_batch_seqs" : 500,
+    "hard_train_samples" : false,
+    "n_test_samples" : 10,
+    "aux_loss_coeff" : 1,
+    "min_lag" : 1,
+    "max_lag" : 1
+}

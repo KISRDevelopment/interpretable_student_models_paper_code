@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd 
 import glob 
 import os 
+import json 
 
 def main(path, output_path):
 
@@ -23,7 +24,7 @@ def load_results(path):
         df = pd.read_csv(file)
         df['model'] = model 
         df['dataset'] = dataset 
-
+        df['dataset_kcs'] = int(dataset.split('_')[1])
         if model.startswith('sd'):
             params_file = file.replace('.csv', '.params.npy.npz')
             
@@ -36,6 +37,22 @@ def load_results(path):
                 ns_unique_kcs.append(len(unique_kcs))
             
             df['mean_n_unique_kcs'] = np.mean(ns_unique_kcs)
+
+            cfg_file = file.replace('.csv', '.json')
+            with open(cfg_file, 'r') as f:
+                cfg = json.load(f)
+            
+            df['model_kcs'] = cfg['n_latent_kcs']
+            df['aux_loss'] = cfg['aux_loss_coeff'] > 0
+            df['rep'] = 'rep' in model 
+            
+            model_name = 'sd'
+            if cfg['aux_loss_coeff'] > 0:
+                model_name += '-aux-loss'
+            if 'rep' in model:
+                model_name += '-rep'
+            df['model'] = model_name 
+
 
         dfs.append(df)
     
