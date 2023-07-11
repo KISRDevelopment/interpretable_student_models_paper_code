@@ -38,12 +38,19 @@ def main():
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)
 
-    if not cfg['problem_effects']:
+    problems_as_skills = cfg.get('problems_as_skills', False)
+    problem_effects = cfg['problem_effects']
+    single_kc = cfg['single_kc']
+
+    if cfg.get('problems_as_skills', False):
+        df['skill'] = df['problem'].tolist()
         df['problem'] = 0
+    elif not cfg['problem_effects']:
+        df['problem'] = 0
+    
     if cfg.get('single_kc', False):
         df['skill'] = 0
-    if cfg.get('problems_as_skills', False):
-        df['skill'] = df['problem']
+    
     
     cfg['n_kcs'] = np.max(df['skill']) + 1
     cfg['n_problems'] = np.max(df['problem']) + 1

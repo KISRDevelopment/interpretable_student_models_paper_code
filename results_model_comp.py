@@ -2,16 +2,20 @@ import numpy as np
 import pandas as pd 
 import glob 
 import os 
+import json 
 
 def main(path, output_path):
 
     df = load_results(path)
     df.to_csv(output_path, index=False)
-    print(df)
+    #print(df)
 
-    gdf = df.groupby(['model', 'dataset'])['auc_roc'].mean()
-    print(gdf)
-    gdf = df.groupby(['model', 'dataset'])['auc_roc'].std()
+    #gdf = df.groupby(['model', 'dataset'])['auc_roc'].mean()
+    #print(gdf)
+    #gdf = df.groupby(['model', 'dataset'])['auc_roc'].std()
+    #print(gdf)
+
+    gdf = df.groupby(['model', 'dataset'])[['n_train_batch_seqs','n_test_batch_seqs','n_test_samples','learning_rate','es_thres']].agg('mean').reset_index()
     print(gdf)
 def load_results(path):
 
@@ -26,6 +30,20 @@ def load_results(path):
         df = pd.read_csv(file)
         df['model'] = model 
         df['dataset'] = dataset.replace('gervetetal_','')
+
+        cfg_file = file.replace('.csv', '.json')
+        if not os.path.exists(cfg_file):
+            print("Couldn't find %s" % cfg_file)
+            continue
+        with open(cfg_file, 'r') as f:
+            cfg = json.load(f)
+        
+        df['n_train_batch_seqs'] = cfg.get('n_train_batch_seqs', None)
+        df['n_test_batch_seqs'] = cfg.get('n_test_batch_seqs', None)
+        df['n_test_samples'] = cfg.get('n_test_samples', None)
+        df['learning_rate'] = cfg.get('learning_rate', None)
+        df['es_thres'] = cfg.get('es_thres', None)
+
 
         dfs.append(df)
     
