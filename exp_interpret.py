@@ -67,6 +67,7 @@ def main():
                  obs_logits_problem=model.obs_logits_problem.cpu().detach().numpy(),
                  problem_seqs=all_problem[chosen_seq_ids,:],
                  kc_seqs=all_kc[chosen_seq_ids,:],
+                 dynamics_logits=model._dynamics_logits.weight.cpu().detach().numpy(),
                  posterior_cnts=posterior_cnts)
     
 def predict(cfg, model, seqs):
