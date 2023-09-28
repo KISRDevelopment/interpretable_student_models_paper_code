@@ -7,7 +7,6 @@ from torch import Tensor
 from typing import List, Tuple
 import torch.nn as nn 
 from numba import jit
-import joint_pmf 
 
 def main():
     

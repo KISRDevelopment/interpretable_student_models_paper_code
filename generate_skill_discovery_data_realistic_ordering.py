@@ -9,6 +9,7 @@ import sklearn.datasets
 import sys 
 from sklearn.neighbors import NearestNeighbors
 import os 
+import model_brute_force_bkt
 
 def to_student_sequences(df):
     seqs = defaultdict(lambda: {
@@ -41,7 +42,7 @@ def main(dataset_path):
     #
     # generate skill parameters
     #
-    probs = generate_skill_params(n_skills)
+    probs = generate_skill_params(df)
     
     #
     # generate answers
@@ -61,7 +62,7 @@ def main(dataset_path):
     #
     # generate problem->skill assignments
     #
-    X, A = generate_clusters(skills_to_problems, 
+    X = generate_clusters(skills_to_problems, 
         n_features, 
         target_nn_acc,
         std_range)
@@ -71,9 +72,9 @@ def main(dataset_path):
     #
 
     basename = os.path.basename(dataset_path).replace('.csv','')
-    synth_df.to_csv("data/datasets/sd_%s.csv" % basename, index=False)
-    np.save("data/datasets/sd_%s.embeddings.npy" % basename, X)
-    np.save("data/splits/sd_%s.npy" % basename, splits)
+    synth_df.to_csv("data/datasets/sd-realistic_%s.csv" % basename, index=False)
+    np.save("data/datasets/sd-realistic_%s.embeddings.npy" % basename, X)
+    np.save("data/splits/sd-realistic_%s.npy" % basename, splits)
     
     
 
@@ -83,23 +84,39 @@ def create_one_to_many_mapping(aa, bb):
         mapping[a].add(b)
     return { k: list(v) for k, v in mapping.items() }
 
-def generate_skill_params(n_skills):
-   
-    # possible parameter values
-    pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
-    pLs = [0.01, 0.05, 0.1, 0.2] 
-    pFs = [0.01, 0.05, 0.1, 0.2]
-    pGs = [0.1, 0.2, 0.3, 0.4]
-    pSs = [0.1, 0.2, 0.3, 0.4]
-
-    all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
-
-    print("Choosing from %d combinations with replacement" % all_prob_combs.shape[0])
-
-    probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=True, size=n_skills), :]
+def generate_skill_params(df):
+    
+    # 
+    # extract KC parameters
+    #
+    seqs_by_skill = model_brute_force_bkt.prepare(df)
+    params = fit_bkt(seqs_by_skill) # skill -> pL, pF, pG, pS, pL0
+    
+    probs = np.zeros((len(params), 5))
+    for skill, p in params.items():
+        probs[skill, :] = [p[4], p[0], p[1], p[2], p[3]]
     
     # n_skills x 5
     return probs 
+
+def fit_bkt(seqs_by_skill):
+    """ fit one BKT model per skill """
+
+    pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
+    pLs = [0.01, 0.05, 0.1, 0.15, 0.2] 
+    pFs = [0.01, 0.05, 0.1, 0.15, 0.2]
+    pGs = [0.05, 0.1, 0.2, 0.3, 0.4]
+    pSs = [0.05, 0.1, 0.2, 0.3, 0.4]
+    search_space = np.array(list(itertools.product(pLs, pFs, pGs, pSs, pIs)))
+    
+    p_by_skill = {}
+    for skill in sorted(seqs_by_skill.keys()):
+        seqs = seqs_by_skill[skill]
+        best_p = model_brute_force_bkt.fit_brute(seqs, search_space)
+        p_by_skill[skill] = best_p
+        print("Finished skill %d" % skill)
+        
+    return p_by_skill
 
 def generate_clusters(skills_to_problems, 
     n_features, 
@@ -119,16 +136,12 @@ def generate_clusters(skills_to_problems,
     for cluster_std in sorted_cluster_stds:
         means = np.zeros(reps)
         for r in range(reps):
-            print("rep %d" % r)
             X, y = sklearn.datasets.make_blobs(n_samples=samples_per_cluster,
                                                n_features=n_features, 
                                                cluster_std=cluster_std, 
                                                center_box=(-1, 1))
-            print("made blobs")
             nbrs = NearestNeighbors(n_neighbors=2, algorithm='auto').fit(X)
-            print("fitted nn")
             distances, indices = nbrs.kneighbors(X)
-            print("got distances")
             point_label = y[indices[:,0]]
             label_of_nn = y[indices[:,1]]
             means[r] = np.mean(point_label == label_of_nn)
@@ -154,15 +167,12 @@ def generate_clusters(skills_to_problems,
     
     # reorganize according to problem assignments
     output_X = np.zeros_like(X)
-    output_y = np.zeros_like(y)
-    offset = 0
-    for skill, problem_ids in skills_to_problems.items():
-        end = offset + len(problem_ids)
-        output_X[problem_ids, :] = X[offset:end, :]
-        output_y[problem_ids] = y[offset:end]
-        offset = end 
+    for skill in skills:
+        ix = y == skill 
+        problem_ids = skills_to_problems[skill]
+        output_X[problem_ids, :] = X[ix, :]
     
-    return output_X, output_y
+    return output_X
 
 
 def generate_seqs(seqs, probs):
