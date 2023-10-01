@@ -18,7 +18,7 @@ def main():
     use_embeddings = sys.argv[3] == '1'
 
     datasets = [os.path.basename(p).replace('.csv','') for p in glob.glob("data/datasets/sd-realistic_*.csv")]
-    datasets = ['sd-realistic_gervetetal_assistments09']
+    datasets = ['sd-realistic_gervetetal_assistments17_first_attempt']
     print(datasets)
     
     os.makedirs(output_dir, exist_ok=True)
