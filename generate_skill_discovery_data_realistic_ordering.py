@@ -27,6 +27,7 @@ def main(dataset_path):
     
     df = pd.read_csv(dataset_path)
     
+    basename = os.path.basename(dataset_path).replace('.csv','')
     seqs = to_student_sequences(df)
 
     n_skills = np.max(df['skill']) + 1
@@ -43,7 +44,9 @@ def main(dataset_path):
     # generate skill parameters
     #
     probs = generate_skill_params(df)
-    
+    np.save("data/datasets/sd-realistic_%s.probs.npy" % basename, probs)
+    exit()
+
     #
     # generate answers
     #
@@ -71,7 +74,6 @@ def main(dataset_path):
     # save everything
     #
 
-    basename = os.path.basename(dataset_path).replace('.csv','')
     synth_df.to_csv("data/datasets/sd-realistic_%s.csv" % basename, index=False)
     np.save("data/datasets/sd-realistic_%s.embeddings.npy" % basename, X)
     np.save("data/splits/sd-realistic_%s.npy" % basename, splits)

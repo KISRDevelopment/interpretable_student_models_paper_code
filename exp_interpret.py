@@ -16,6 +16,10 @@ def main():
         cfg = json.load(f)
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
+
+    problem_to_kc = dict(zip(df['problem'], df['skill']))
+    problem_to_kc = np.array([problem_to_kc[p] for p in sorted(problem_to_kc.keys())])
+    
     splits = np.load("data/splits/%s.npy" % dataset_name)
 
     cfg['n_kcs'] = np.max(df['skill']) + 1
@@ -44,7 +48,7 @@ def main():
     print(posterior_cnts)
 
     # select some examples
-    eligible_ix = seq_lens >= 500
+    eligible_ix = seq_lens >= 100
     print("eligible sequences: %d out of %d" % (np.sum(eligible_ix), eligible_ix.shape[0]))
     ypred = ypred[eligible_ix, :]
     ytrue = ytrue[eligible_ix, :]
@@ -54,7 +58,7 @@ def main():
     all_problem = all_problem[eligible_ix, :]
     all_kc = all_kc[eligible_ix, :]
 
-    chosen_seq_ids = select_examples(seq_mu, np.linspace(0.05, 0.95, 10))
+    chosen_seq_ids = select_examples(seq_mu, np.linspace(0.01, 0.99, 10))
 
     np.savez(output_path, 
                  seq_lens=seq_lens[chosen_seq_ids],
@@ -68,7 +72,8 @@ def main():
                  problem_seqs=all_problem[chosen_seq_ids,:],
                  kc_seqs=all_kc[chosen_seq_ids,:],
                  dynamics_logits=model._dynamics_logits.weight.cpu().detach().numpy(),
-                 posterior_cnts=posterior_cnts)
+                 posterior_cnts=posterior_cnts,
+                 problem_to_kc=problem_to_kc)
     
 def predict(cfg, model, seqs):
 
