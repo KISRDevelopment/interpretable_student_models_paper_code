@@ -103,9 +103,15 @@ def run(cfg, df, splits):
         results.append(run_result)
 
         with th.no_grad():
+            
             all_params['dynamics_logits'].append(model._dynamics_logits.weight.cpu().numpy())
-            all_params['obs_logits_kc'].append(model.obs_logits_kc.cpu().numpy())
-            all_params['obs_logits_problem'].append(model.obs_logits_problem.cpu().numpy())
+            
+            all_params['obs_logits_problem_not_know'].append(model.obs_logits_problem_not_know.cpu().numpy())
+            all_params['obs_logits_problem_boost'].append(model.obs_logits_problem_boost.cpu().numpy())
+            
+            all_params['obs_logits_kc_not_know'].append(model.obs_logits_kc_not_know.cpu().numpy())
+            all_params['obs_logits_kc_boost'].append(model.obs_logits_kc_boost.cpu().numpy())
+            
             all_params['student_prototypes'].append(model.student_prototypes.cpu().numpy())
         
         model_state_dicts.append(copy.deepcopy(model.state_dict()))
@@ -255,9 +261,21 @@ class BktModel(nn.Module):
         # BKT Parameters
         #
         self._dynamics_logits = nn.Embedding(cfg['n_kcs'], 3) # pL, pF, pI0
-        self.obs_logits_problem = nn.Parameter(th.zeros(cfg['n_problems'], 2))
-        self.obs_logits_kc = nn.Parameter(th.randn(cfg['n_kcs'], 2))
         
+        self.obs_logits_problem_not_know = nn.Parameter(th.zeros(cfg['n_problems'])) 
+        self.obs_logits_problem_boost = nn.Parameter(th.zeros(cfg['n_problems'])) 
+
+        self.obs_logits_kc_not_know = nn.Parameter(th.randn(cfg['n_kcs']))
+        self.obs_logits_kc_boost = nn.Parameter(th.randn(cfg['n_kcs']).exp())
+        
+        with th.no_grad():
+            init_prototypes = th.randn(cfg['n_student_prototypes'], 4) # (Guessing, Not Slipping Boost, Learning, Not Forgetting)
+            init_prototypes[:, 1] = init_prototypes[:, 1].exp()
+        
+        self.student_prototypes = nn.Parameter(init_prototypes) # Ax4 (Guessing, Not Slipping Boost, Learning, Not Forgetting)
+
+        self.prototype_index = th.arange(cfg['n_student_prototypes']).long().to(cfg['device']) # A
+
         if cfg['bkt_module'] == 'fbkt':
             bkt_module = layer_fastbkt.FastBkt(cfg['fastbkt_n'], cfg['device'])
         elif cfg['bkt_module'] == 'bkt':
@@ -268,15 +286,6 @@ class BktModel(nn.Module):
 
         self._device = cfg['device'] 
 
-        # cross the ability levels for two dim abilities
-        #ability_levels = np.linspace(cfg['ability_levels_min'], cfg['ability_levels_max'], cfg['n_ability_levels'])
-        #ability_levels = list(itertools.product(ability_levels, ability_levels))
-
-        #self.ability_levels = th.tensor(ability_levels).float().to(cfg['device']) # Ax2
-        #self.ability_index = th.arange(self.ability_levels.shape[0]).long().to(cfg['device']) # A 
-
-        self.student_prototypes = nn.Parameter(th.randn(cfg['n_student_prototypes'], 4)) # Ax4
-        self.prototype_index = th.arange(cfg['n_student_prototypes']).long().to(cfg['device']) # A
     def forward(self, seqs, ytrue, return_posteriors=False):
         orig_batch_size = len(seqs)
         n_ability_levels = self.student_prototypes.shape[0]
@@ -364,15 +373,17 @@ class BktModel(nn.Module):
         """
         dynamics_logits = self._dynamics_logits(kc) # Bx3
 
-        obs_logits_kc = self.obs_logits_kc[kc, :] # Bx2
-        obs_logits_problem = self.obs_logits_problem[problem, :] # BxTx2
-        obs_logits = obs_logits_kc[:,None,:] + obs_logits_problem # BxTx2
+        obs_logits_problem_not_know = self.obs_logits_problem_not_know[problem] # BxT
+        obs_logits_kc_not_know = self.obs_logits_kc_not_know[kc] # B
+        obs_logits_problem_know = obs_logits_problem_not_know + F.relu(self.obs_logits_problem_boost[problem]) # BxT
+        obs_logits_kc_know = obs_logits_kc_not_know + F.relu(self.obs_logits_kc_boost[kc]) # B 
+        ability_level_know = ability_level[:, [0]] + F.relu(ability_level[:, [1]]) # Bx1
 
-
-        # adjust observation probabilities to account for student ability
-        obs_logits[:, :, 0] = ability_level[:, [0]] + obs_logits[:, :, 0] # greater ability -> greater prob of guessing
-        obs_logits[:, :, 1] = obs_logits[:, :, 1] - ability_level[:, [1]] # greater ability -> smaller prob of slipping
-
+        # BxT
+        obs_logits_guess = obs_logits_kc_not_know[:,None] + obs_logits_problem_not_know + ability_level[:, [0]]
+        obs_logits_not_slip = obs_logits_problem_know + obs_logits_kc_know[:,None] + ability_level_know
+        obs_logits = th.concat((obs_logits_guess[:,:,None], -obs_logits_not_slip[:,:,None]), dim=2) #BxTx2
+        
         # adjust dynamics probabilities to account for student ability
         
         dynamics_logits[:, 0] = dynamics_logits[:, 0] + ability_level[:, 2] 

@@ -39,13 +39,16 @@ def main(dataset_path):
     
     print("Problems: %d, skills: %d" % (n_problems, n_skills))
     
+    #prefix = "sd-realistic_%s" % basename
+    prefix = "sd-realistic_random_params_%s" % basename
     
     #
     # generate skill parameters
     #
-    probs = generate_skill_params(df)
-    np.save("data/datasets/sd-realistic_%s.probs.npy" % basename, probs)
-    exit()
+    #probs = generate_skill_params(df)
+    probs = generate_skill_params_random(df, forgetting=True)
+    np.save("data/datasets/%s.probs.npy" % prefix, probs)
+    
 
     #
     # generate answers
@@ -74,9 +77,9 @@ def main(dataset_path):
     # save everything
     #
 
-    synth_df.to_csv("data/datasets/sd-realistic_%s.csv" % basename, index=False)
-    np.save("data/datasets/sd-realistic_%s.embeddings.npy" % basename, X)
-    np.save("data/splits/sd-realistic_%s.npy" % basename, splits)
+    synth_df.to_csv("data/datasets/%s.csv" % prefix, index=False)
+    np.save("data/datasets/%s.embeddings.npy" % prefix, X)
+    np.save("data/splits/%s.npy" % prefix, splits)
     
     
 
@@ -97,6 +100,25 @@ def generate_skill_params(df):
     probs = np.zeros((len(params), 5))
     for skill, p in params.items():
         probs[skill, :] = [p[4], p[0], p[1], p[2], p[3]]
+    
+    # n_skills x 5
+    return probs 
+
+def generate_skill_params_random(df, forgetting):
+    n_skills = np.unique(df['skill']).shape[0]
+
+    # possible parameter values
+    pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
+    pLs = [0.01, 0.05, 0.1, 0.2] 
+    pFs = [0.01, 0.05, 0.1, 0.2] if forgetting else [0.0]
+    pGs = [0.1, 0.2, 0.3, 0.4]
+    pSs = [0.1, 0.2, 0.3, 0.4]
+
+    all_prob_combs = np.array(list(itertools.product(pIs, pLs, pFs, pGs, pSs)))
+
+    print("Choosing from %d combinations with replacement" % all_prob_combs.shape[0])
+
+    probs = all_prob_combs[rng.choice(all_prob_combs.shape[0], replace=True, size=n_skills), :]
     
     # n_skills x 5
     return probs 
