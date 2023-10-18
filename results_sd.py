@@ -23,8 +23,11 @@ def load_results(path):
 
         df = pd.read_csv(file)
         df['model'] = model 
-        df['dataset'] = dataset 
-        df['dataset_kcs'] = int(dataset.split('_')[1])
+        df['dataset'] = dataset
+        try: 
+            df['dataset_kcs'] = int(dataset.split('_')[1])
+        except:
+            df['dataset_kcs'] = 0
         if model.startswith('sd'):
             params_file = file.replace('.csv', '.params.npy.npz')
             

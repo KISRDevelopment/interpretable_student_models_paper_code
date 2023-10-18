@@ -18,7 +18,7 @@ def main():
     use_embeddings = sys.argv[3] == '1'
 
     datasets = [os.path.basename(p).replace('.csv','') for p in glob.glob("data/datasets/sd-realistic_*.csv")]
-    datasets = ['sd-realistic_random_params_with_forgetting_gervetetal_statics']
+    datasets = ['sd-realistic_random_params_gervetetal_statics']
     print(datasets)
     
     os.makedirs(output_dir, exist_ok=True)
