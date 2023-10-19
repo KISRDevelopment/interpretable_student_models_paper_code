@@ -71,7 +71,8 @@ def main(dataset_path):
     X = generate_clusters(skills_to_problems, 
         n_features, 
         target_nn_acc,
-        std_range)
+        std_range,
+        downsample_X=n_problems > 50_000)
     
     #
     # save everything
@@ -146,19 +147,24 @@ def generate_clusters(skills_to_problems,
     n_features, 
     target_nn_acc, 
     sorted_cluster_stds, 
-    reps=10):
+    reps=10,
+    downsample_X=False):
     """
         Generates clusters that are caliberated such that a nearest neighbor classifier would have a given accuracy
     """
 
     skills = sorted(skills_to_problems.keys())
-    samples_per_cluster = [len(skills_to_problems[s]) for s in skills]
+    divisor = 10 if downsample_X else 1
+
+    samples_per_cluster = [max(1, len(skills_to_problems[s]) // divisor) for s in skills]
     
     min_diff = np.inf
     best_std = 0
     last_diff = 0
+    
     for cluster_std in sorted_cluster_stds:
         means = np.zeros(reps)
+
         for r in range(reps):
             X, y = sklearn.datasets.make_blobs(n_samples=samples_per_cluster,
                                                n_features=n_features, 
@@ -184,6 +190,9 @@ def generate_clusters(skills_to_problems,
         last_diff = acc_diff
     
     print("Best Std: %0.2f (diff: %0.2f)" % (best_std, min_diff))
+
+    samples_per_cluster = [len(skills_to_problems[s]) for s in skills]
+    
     X, y = sklearn.datasets.make_blobs(n_samples=samples_per_cluster,
                                         n_features=n_features, 
                                         cluster_std=best_std, 
