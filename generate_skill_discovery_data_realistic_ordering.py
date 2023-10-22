@@ -6,29 +6,18 @@ import split_dataset
 from scipy.stats import qmc
 import itertools
 import sklearn.datasets
+import sklearn.metrics
 import sys 
 from sklearn.neighbors import NearestNeighbors
 import os 
-import model_brute_force_bkt
-
-def to_student_sequences(df):
-    seqs = defaultdict(lambda: {
-        "obs" : [],
-        "kc" : [],
-        "problem" : []
-    })
-    for r in df.itertuples():
-        seqs[r.student]["obs"].append(r.correct)
-        seqs[r.student]["kc"].append(r.skill)
-        seqs[r.student]["problem"].append(r.problem)
-    return seqs
+import utils 
 
 def main(dataset_path):
     
     df = pd.read_csv(dataset_path)
     
     basename = os.path.basename(dataset_path).replace('.csv','')
-    seqs = to_student_sequences(df)
+    seqs = utils.to_seqs(df)
 
     n_skills = np.max(df['skill']) + 1
     n_problems = np.max(df['problem']) + 1
@@ -39,14 +28,12 @@ def main(dataset_path):
     
     print("Problems: %d, skills: %d" % (n_problems, n_skills))
     
-    #prefix = "sd-realistic_%s" % basename
-    prefix = "sd-realistic_random_params_%s" % basename
+    prefix = "sd-realistic_%s" % basename
     
     #
     # generate skill parameters
     #
-    #probs = generate_skill_params(df)
-    probs = generate_skill_params_random(df, forgetting=True)
+    probs = generate_skill_params_random(df)
     np.save("data/datasets/%s.probs.npy" % prefix, probs)
     
 
@@ -90,28 +77,13 @@ def create_one_to_many_mapping(aa, bb):
         mapping[a].add(b)
     return { k: list(v) for k, v in mapping.items() }
 
-def generate_skill_params(df):
-    
-    # 
-    # extract KC parameters
-    #
-    seqs_by_skill = model_brute_force_bkt.prepare(df)
-    params = fit_bkt(seqs_by_skill) # skill -> pL, pF, pG, pS, pL0
-    
-    probs = np.zeros((len(params), 5))
-    for skill, p in params.items():
-        probs[skill, :] = [p[4], p[0], p[1], p[2], p[3]]
-    
-    # n_skills x 5
-    return probs 
-
-def generate_skill_params_random(df, forgetting):
+def generate_skill_params_random(df):
     n_skills = np.unique(df['skill']).shape[0]
 
     # possible parameter values
     pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
     pLs = [0.01, 0.05, 0.1, 0.2] 
-    pFs = [0.01, 0.05, 0.1, 0.2] if forgetting else [0.0]
+    pFs = [0.01, 0.05, 0.1, 0.2]
     pGs = [0.1, 0.2, 0.3, 0.4]
     pSs = [0.1, 0.2, 0.3, 0.4]
 
@@ -123,25 +95,6 @@ def generate_skill_params_random(df, forgetting):
     
     # n_skills x 5
     return probs 
-
-def fit_bkt(seqs_by_skill):
-    """ fit one BKT model per skill """
-
-    pIs = [0.1, 0.25, 0.5, 0.75, 0.9]
-    pLs = [0.01, 0.05, 0.1, 0.15, 0.2] 
-    pFs = [0.01, 0.05, 0.1, 0.15, 0.2]
-    pGs = [0.05, 0.1, 0.2, 0.3, 0.4]
-    pSs = [0.05, 0.1, 0.2, 0.3, 0.4]
-    search_space = np.array(list(itertools.product(pLs, pFs, pGs, pSs, pIs)))
-    
-    p_by_skill = {}
-    for skill in sorted(seqs_by_skill.keys()):
-        seqs = seqs_by_skill[skill]
-        best_p = model_brute_force_bkt.fit_brute(seqs, search_space)
-        p_by_skill[skill] = best_p
-        print("Finished skill %d" % skill)
-        
-    return p_by_skill
 
 def generate_clusters(skills_to_problems, 
     n_features, 
@@ -163,7 +116,8 @@ def generate_clusters(skills_to_problems,
     last_diff = 0
     
     for cluster_std in sorted_cluster_stds:
-        means = np.zeros(reps)
+        means_bacc = np.zeros(reps)
+        means_acc = np.zeros(reps)
 
         for r in range(reps):
             X, y = sklearn.datasets.make_blobs(n_samples=samples_per_cluster,
@@ -174,20 +128,20 @@ def generate_clusters(skills_to_problems,
             distances, indices = nbrs.kneighbors(X)
             point_label = y[indices[:,0]]
             label_of_nn = y[indices[:,1]]
-            means[r] = np.mean(point_label == label_of_nn)
             
-        acc_diff = np.mean(np.abs(target_nn_acc - np.mean(means)))
-        
-        print("%0.2f %0.2f %0.2f" % (cluster_std, np.mean(means), acc_diff))
-        
-        if acc_diff < min_diff:
-            min_diff = acc_diff
+            means_bacc[r] = sklearn.metrics.balanced_accuracy_score(point_label, label_of_nn)
+            means_acc[r] = sklearn.metrics.accuracy_score(point_label, label_of_nn)
+
+        bacc_diff = np.mean(np.abs(target_nn_acc - np.mean(means_bacc)))
+        acc_diff = np.mean(np.abs(target_nn_acc - np.mean(means_acc)))
+
+        loss = acc_diff
+        if loss < min_diff:
+            min_diff = loss
             best_std = cluster_std 
-        elif acc_diff - last_diff > 0.02:
-            pass
-            #break # diff is starting to increase
         
-        last_diff = acc_diff
+        print("Cluster Std: %0.2f, Mean Acc: %0.2f, Mean BACC: %0.2f %s" % (cluster_std, np.mean(means_acc), np.mean(means_bacc), '***' if min_diff == loss else ''))
+        
     
     print("Best Std: %0.2f (diff: %0.2f)" % (best_std, min_diff))
 

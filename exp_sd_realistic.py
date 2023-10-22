@@ -13,13 +13,12 @@ import sys
 import json 
 
 def main():
-    cfg_path = sys.argv[1]
-    output_dir = sys.argv[2]
-    use_embeddings = sys.argv[3] == '1'
+    dataset_name = sys.argv[1]
+    cfg_path = sys.argv[2]
+    output_dir = sys.argv[3]
+    use_embeddings = sys.argv[4] == '1'
 
-    datasets = [os.path.basename(p).replace('.csv','') for p in glob.glob("data/datasets/sd-realistic_*.csv")]
-    datasets = ['sd-realistic_random_params_gervetetal_statics']
-    print(datasets)
+    datasets = [dataset_name]
     
     os.makedirs(output_dir, exist_ok=True)
 
