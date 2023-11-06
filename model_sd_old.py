@@ -226,9 +226,9 @@ def main(cfg, df, splits):
     ref_assignment = get_problem_skill_assignment(df)
     if 'problem_feature_mat_path' in cfg:
         problem_feature_mat = np.load(cfg['problem_feature_mat_path'])
-        mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
-        std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
-        problem_feature_mat = (problem_feature_mat - mu) / (std+1e-9)
+        #mu = np.mean(problem_feature_mat, axis=0, keepdims=True)
+        #std = np.std(problem_feature_mat, axis=0, ddof=1, keepdims=True)
+        #problem_feature_mat = (problem_feature_mat - mu) / (std+1e-9)
         cfg['problem_feature_mat'] = th.tensor(problem_feature_mat).float().to(cfg['device'])
 
     df['skill'] = df['problem']
@@ -270,6 +270,7 @@ def main(cfg, df, splits):
 
         ypred_test = np.exp(log_ypred_test)
 
+        model.eval()
         with th.no_grad():
             param_alpha, param_obs, param_t, Aprior = model.get_params()
             all_params['alpha'].append(param_alpha.cpu().numpy())

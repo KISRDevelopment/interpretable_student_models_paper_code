@@ -7,3 +7,4 @@ venv
 api_key
 .DS_Store
 cmds.py
+openai_api_key
