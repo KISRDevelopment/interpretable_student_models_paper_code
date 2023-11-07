@@ -13,5 +13,5 @@
     "ability_levels" : [0.0],
     "problem_effects" : false,
     "single_kc" : false,
-    "problems_as_skills" : false
+    "problems_as_skills" : true
 }
