@@ -343,4 +343,3 @@ if __name__ == "__main__":
 
     param_output_path = output_path.replace(".csv", ".params.npy")
     np.savez(param_output_path, **all_params)
-

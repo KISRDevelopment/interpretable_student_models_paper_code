@@ -12,7 +12,7 @@ def main():
     is_na = pd.isna(skill_col)
     is_control = df['Condition'] == 'control'
 
-    df = df[~is_hint & ~is_na]
+    df = df[~is_hint & ~is_na & is_control]
     
     df['new_step'] = make_step_col(df)
 

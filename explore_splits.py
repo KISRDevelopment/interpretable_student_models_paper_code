@@ -11,7 +11,8 @@ def main():
                 'gervetetal_assistments17',
                 'gervetetal_bridge_algebra06',
                 'gervetetal_spanish',
-                'gervetetal_statics'
+                'gervetetal_statics',
+                'equations'
     ]
 
     summaries = []
