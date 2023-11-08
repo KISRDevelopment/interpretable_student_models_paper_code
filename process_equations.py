@@ -1,77 +1,84 @@
 import pandas as pd
 import numpy as np 
 import split_dataset
-import openai 
 import json 
+from sentence_transformers import SentenceTransformer
+from collections import defaultdict
+import re 
+import ast 
+from _ast import AST
 
 def main():
+    output_name = 'equations'
 
     df = pd.read_csv("data/raw/ds165_equations.txt", sep="\t")
-    skill_col = df['KC (Default)']
+    skill_col = 'KC (Default)'
     is_hint = df['First Attempt'] == 'hint'
-    is_na = pd.isna(skill_col)
+    is_na = pd.isna(df[skill_col])
     is_control = df['Condition'] == 'control'
 
     df = df[~is_hint & ~is_na & is_control]
     
-    df['new_step'] = make_step_col(df)
-
-    problem_col = 'new_step'
-    #problem_col = 'Problem Name'
-    #problem_col = 'KC (Default)'
+    problems = extract_problems(df['Step Name'].str.lower().tolist())
 
     print("Trials: %d" % df.shape[0])
     print("Students: %d" % pd.unique(df['Anon Student Id']).shape[0])
-    print("Problems: %d" % pd.unique(df['Problem Name']).shape[0])
-    print("Steps: %d" % pd.unique(df['new_step']).shape[0])
-    print("Skills: %d" % (pd.unique(skill_col).shape[0]))
+    print("Steps: %d" % pd.unique(problems).shape[0])
+    print("Skills: %d" % (pd.unique(df[skill_col]).shape[0]))
     
-    problem_id, problem_text_to_id = to_numeric_sequence(df[problem_col])
+    problem_id, problem_text_to_id = to_numeric_sequence(problems)
     with open("data/datasets/equations.problem_text_to_id.json", "w") as f:
         json.dump(problem_text_to_id, f, indent=4)
     
     output_df = pd.DataFrame({
         "student" : to_numeric_sequence(df['Anon Student Id'])[0],
         "problem" : problem_id,
-        "skill" : to_numeric_sequence(df['KC (Default)'])[0],
+        "skill" : to_numeric_sequence(df[skill_col])[0],
         "correct" : [1 if c == 'correct' else 0 for c in df['First Attempt']]
     })
 
-    print(output_df)
-
-    output_df.to_csv("data/datasets/equations.csv", index=False)
+    output_df.to_csv("data/datasets/%s.csv" % output_name, index=False)
     full_splits = split_dataset.main(output_df)
-    np.save("data/splits/equations.npy", full_splits)
+    np.save("data/splits/%s.npy" % output_name, full_splits)
     
     problem_id_to_text = { v: k for k, v in problem_text_to_id.items() }
     problems = [problem_id_to_text[i] for i in range(len(problem_id_to_text))]
-    embeddings = embed_problems(problems)
-
-    print(embeddings.shape)
-    np.save("data/datasets/equations.embeddings.npy", embeddings)
-
-def make_step_col(df):
-
-    problems = df['Problem Name'].tolist()
-    steps = df['Step Name'].tolist()
-
-    rows = []
-    curr_problem = None
-    for i in range(df.shape[0]):
-        if problems[i] != curr_problem:
-            rows.append([])
-            curr_problem = problems[i]
-        rows[-1].append(steps[i])
     
+    model = SentenceTransformer('all-mpnet-base-v2')
+    embedding = model.encode(problems)
+    print(embedding.shape)
+    np.save("data/datasets/%s.embeddings.npy" % output_name, embedding)
+
+def extract_problems(steps):
     new_steps = []
-    for row in rows:
-        from_step = row[:-1]
-        to_step = row[1:]
-        ns = ["transform %s to %s" % pair for pair in zip(from_step, to_step)]
-        ns += ['solve %s' % row[-1]]
-        new_steps.extend(ns)
+    for s in steps:
+        parts = re.split(r'\s*=\s*', s)
+        if len(parts) == 2:
+            left = parse_expr(parts[0])
+            right = parse_expr(parts[1])
+            parsed = "%s = %s" % (left, right)
+            new_steps.append(parsed)
+        else:
+            new_steps.append(s)
     
     return new_steps
+
+def parse_expr(expr):
+
+    # norm var names
+    expr = expr.replace('y', 'x')
+
+    # handle implict multiplications
+    expr = re.sub(r'(\d)x', r'\1*x', expr)
+
+    # parse into python ast
+    parsed = ast.parse(expr)
+    
+    # replace constants
+    transformer = Transformer()
+    transformer.visit(parsed)
+    
+    return ast.unparse(parsed)
 
 def to_numeric_sequence(vals):
 
@@ -81,36 +88,14 @@ def to_numeric_sequence(vals):
 
     return [mapping[v] for v in vals], mapping
 
-def embed_problems(problems):
 
-    problems = [p.strip() for p in problems]
+class Transformer(ast.NodeTransformer):
+
+    def generic_visit(self, node: AST) -> AST:
+        if node.__class__.__name__ == "Constant":
+            return ast.Name('C')
     
-    all_embeddings = []
-    for i in range(0, len(problems), 500):
-        embd = get_embeddings(problems[i:(i+500)])
-        all_embeddings.append(embd)
-    
-    return np.vstack(all_embeddings)
-
-def get_embeddings(question_texts, model="text-embedding-ada-002"):
-
-    with open('openai_api_key', 'r') as f:
-        api_key = f.read()
-    
-    openai.api_key = api_key
-   
-    results = openai.Embedding.create(input = question_texts, model=model)['data']
-    return np.array([r['embedding'] for r in results])
-
-def get_embeddings(question_texts, model="text-embedding-ada-002"):
-
-    with open('openai_api_key', 'r') as f:
-        api_key = f.read()
-    
-    openai.api_key = api_key
-   
-    results = openai.Embedding.create(input = question_texts, model=model)['data']
-    return np.array([r['embedding'] for r in results])
+        return super().generic_visit(node)
 
 if __name__ == "__main__":
     main()
