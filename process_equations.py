@@ -7,6 +7,7 @@ from collections import defaultdict
 import re 
 import ast 
 from _ast import AST
+import string 
 
 def main():
     output_name = 'equations'
@@ -20,6 +21,8 @@ def main():
     df = df[~is_hint & ~is_na & is_control]
     
     problems = extract_problems(df['Step Name'].str.lower().tolist())
+    
+    problems_to_orig = dict(zip(problems, df['Step Name'].str.lower().tolist()))
 
     print("Trials: %d" % df.shape[0])
     print("Students: %d" % pd.unique(df['Anon Student Id']).shape[0])
@@ -29,6 +32,8 @@ def main():
     problem_id, problem_text_to_id = to_numeric_sequence(problems)
     with open("data/datasets/equations.problem_text_to_id.json", "w") as f:
         json.dump(problem_text_to_id, f, indent=4)
+    with open("data/datasets/equations.problem_text_to_orig.json", "w") as f:
+        json.dump(problems_to_orig, f, indent=4)
     
     output_df = pd.DataFrame({
         "student" : to_numeric_sequence(df['Anon Student Id'])[0],
@@ -91,9 +96,20 @@ def to_numeric_sequence(vals):
 
 class Transformer(ast.NodeTransformer):
 
+    def __init__(self):
+        super().__init__()
+
+        self._symbols = string.ascii_uppercase
+        self._next_symbol = 0
+        self._map = {}
+
     def generic_visit(self, node: AST) -> AST:
         if node.__class__.__name__ == "Constant":
-            return ast.Name('C')
+            const_node: ast.Constant = node 
+            if const_node.value not in self._map:
+                self._map[const_node.value] = self._symbols[self._next_symbol]
+                self._next_symbol += 1
+            return ast.Name(self._map[const_node.value])
     
         return super().generic_visit(node)
 

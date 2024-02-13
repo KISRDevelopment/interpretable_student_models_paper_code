@@ -19,7 +19,9 @@ def load_results(path):
 
     with open('data/datasets/equations.problem_text_to_id.json', 'r') as f:
         problem_text_to_id = json.load(f)
-
+    with open('data/datasets/equations.problem_text_to_orig.json', 'r') as f:
+        problem_text_to_orig = json.load(f)
+    
     files = glob.glob(path + "/*.csv")
 
     dfs = []
@@ -40,8 +42,8 @@ def load_results(path):
         if cfg['script'] == 'model_sd_old.py':
             df['n_kcs'] = cfg['initial_kcs']
             
-            all_assignments[model] = extract_assignments(file, problem_text_to_id)
-        
+            all_assignments[model] = extract_assignments(file, problem_text_to_id, problem_text_to_orig)
+            
         dfs.append(df)
 
 
@@ -52,7 +54,7 @@ def load_results(path):
 
     return df, all_assignments
 
-def extract_assignments(path, problem_text_to_id, thres=50):
+def extract_assignments(path, problem_text_to_id, problem_text_to_orig, thres=50):
     params_file = path.replace('.csv', '.params.npy.npz')
     d = np.load(params_file)
     Aprior = d['Aprior'] # Splits x Problems x KCs
