@@ -22,6 +22,7 @@ import time
 
 import utils 
 import sklearn.metrics
+import sklearn.cluster 
 
 import layer_fastbkt 
 import layer_bkt 
@@ -31,30 +32,18 @@ def main():
     cfg_path = sys.argv[1]
     dataset_name = sys.argv[2]
     output_path = sys.argv[3]
-
+    problem_feature_mat_path = sys.argv[4]
+    
     with open(cfg_path, 'r') as f:
         cfg = json.load(f)
     
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)
 
-    problems_as_skills = cfg.get('problems_as_skills', False)
-    problem_effects = cfg['problem_effects']
-    single_kc = cfg['single_kc']
-
-    if cfg.get('problems_as_skills', False):
-        df['skill'] = df['problem'].tolist()
-        df['problem'] = 0
-    elif not cfg['problem_effects']:
-        df['problem'] = 0
-    
-    if cfg.get('single_kc', False):
-        df['skill'] = 0
-    
-    
     cfg['n_kcs'] = np.max(df['skill']) + 1
     cfg['n_problems'] = np.max(df['problem']) + 1
     cfg['device'] = 'cuda:0'
+    cfg['problem_feature_mat'] = np.load(problem_feature_mat_path)
 
     results_df, all_params = run(cfg, df, splits) 
     results_df.to_csv(output_path)
@@ -67,11 +56,10 @@ def run(cfg, df, splits):
     lens = df.groupby('student')['problem'].count()
     print("Min, median, max sequence length: ", (np.min(lens), np.median(lens), np.max(lens)))
     
-    seqs = utils.to_seqs(df)
-    
     results = []
     all_params = defaultdict(list)
 
+    problem_feature_mat = cfg['problem_feature_mat']
     for s in range(splits.shape[0]):
         split = splits[s, :]
 
@@ -83,10 +71,21 @@ def run(cfg, df, splits):
         valid_df = df[valid_ix]
         test_df = df[test_ix]
 
+        #
+        # build problem clustering model based on training problems only
+        #
+        train_problems = pd.unique(train_df['problem'])
+        train_problem_features = problem_feature_mat[train_problems, :]
+        kmeans_model = sklearn.cluster.KMeans(n_clusters=cfg['n_clusters'], n_init='auto', random_state=0).fit(train_problem_features)
+        problem_labels = kmeans_model.predict(problem_feature_mat) # predict labels for all problems
+
+        # extract sequences based on the clustering
+        seqs = to_seqs(df, problem_labels)
+    
         train_students = set(train_df['student'])
         valid_students = set(valid_df['student'])
         test_students = set(test_df['student'])
-
+        
         train_seqs = [seqs[s] for s in train_students]
         valid_seqs = [seqs[s] for s in valid_students]
         test_seqs = [seqs[s] for s in test_students]
@@ -231,6 +230,12 @@ def predict(cfg, model, seqs):
     
     return ytrue, ypred
 
+def to_student_sequences(df, problem_labels):
+    seqs = defaultdict(lambda: defaultdict(list))
+    for r in df.itertuples():
+        problem_skill = problem_labels[r.problem]
+        seqs[r.student][problem_skill].append((r.problem, r.correct))
+    return seqs
 
 def split_seqs_by_kc(seqs):
     obs_seqs = []
@@ -362,7 +367,31 @@ class BktModel(nn.Module):
         logprob_pred = self._bkt_module(corr, dynamics_logits, obs_logits)
         return logprob_pred
 
-
+def to_seqs(df, problem_labels):
+    """
+        Returns a dictionary of dictionaries.
+            student => {
+                kc => [],
+                problem => [],
+                correct => []
+            }
+    """
+    seqs = defaultdict(lambda: {
+        "kc" : [],
+        "problem" : [],
+        "correct" : []
+    })
+    for r in df.itertuples():
+        seqs[r.student]["kc"].append(problem_labels[r.problem])
+        seqs[r.student]["problem"].append(r.problem)
+        seqs[r.student]["correct"].append(r.correct)
+    
+    for student, details in seqs.items():
+        details['kc'] = np.array(details['kc'])
+        details['problem'] = np.array(details['problem'])
+        details['correct'] = np.array(details['correct'])
+        
+    return seqs
 
 if __name__ == "__main__":
     main()
