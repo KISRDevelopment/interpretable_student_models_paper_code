@@ -40,7 +40,7 @@ def main():
     df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
     splits = np.load("data/splits/%s.npy" % dataset_name)
 
-    cfg['n_kcs'] = np.max(df['skill']) + 1
+    cfg['n_kcs'] = cfg['n_clusters']
     cfg['n_problems'] = np.max(df['problem']) + 1
     cfg['device'] = 'cuda:0'
     cfg['problem_feature_mat'] = np.load(problem_feature_mat_path)
@@ -52,6 +52,7 @@ def main():
     np.savez(param_output_path, **all_params)
 
 def run(cfg, df, splits):
+    ref_assignment = get_problem_skill_assignment(df)
 
     lens = df.groupby('student')['problem'].count()
     print("Min, median, max sequence length: ", (np.min(lens), np.median(lens), np.max(lens)))
@@ -78,7 +79,7 @@ def run(cfg, df, splits):
         train_problem_features = problem_feature_mat[train_problems, :]
         kmeans_model = sklearn.cluster.KMeans(n_clusters=cfg['n_clusters'], n_init='auto', random_state=0).fit(train_problem_features)
         problem_labels = kmeans_model.predict(problem_feature_mat) # predict labels for all problems
-
+        
         # extract sequences based on the clustering
         seqs = to_seqs(df, problem_labels)
     
@@ -100,7 +101,8 @@ def run(cfg, df, splits):
 
         run_result = metrics.calculate_metrics(ytrue, ypred_correct)
         run_result['time_diff_sec'] = toc - tic 
-
+        run_result['rand_index'] = compare_kc_assignment(problem_labels, ref_assignment)
+        
         results.append(run_result)
 
         with th.no_grad():
@@ -116,6 +118,11 @@ def run(cfg, df, splits):
     
     return results_df, all_params
 
+def compare_kc_assignment(pred_assignment, ref_assignment):
+    
+    rand_index = sklearn.metrics.adjusted_rand_score(ref_assignment, pred_assignment)
+
+    return rand_index
 def train(cfg, train_seqs, valid_seqs):
     
     # tic = time.perf_counter()
@@ -392,6 +399,13 @@ def to_seqs(df, problem_labels):
         details['correct'] = np.array(details['correct'])
         
     return seqs
+
+def get_problem_skill_assignment(df):
+
+    problems_to_skills = dict(zip(df['problem'], df['skill']))
+    n_problems = np.max(df['problem']) + 1
+    return np.array([problems_to_skills[p] for p in range(n_problems)])
+
 
 if __name__ == "__main__":
     main()

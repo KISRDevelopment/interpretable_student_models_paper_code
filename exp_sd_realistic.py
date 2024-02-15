@@ -18,8 +18,10 @@ def main():
     output_dir = sys.argv[3]
     use_embeddings = sys.argv[4] == '1'
 
-    datasets = [dataset_name]
-    
+    #datasets = [dataset_name]
+    datasets = [#'sd-realistic_gervetetal_bridge_algebra06', 
+                'sd-realistic_gervetetal_statics', 
+                'sd-realistic_gervetetal_assistments09']
     os.makedirs(output_dir, exist_ok=True)
 
     cfg_name = os.path.basename(cfg_path).replace('.json', '')
@@ -30,6 +32,9 @@ def main():
         cfg = json.load(f)
     
     for dataset in datasets:
+        
+        assert os.path.exists("./data/datasets/%s.embeddings.npy" % dataset)
+        
         if os.path.exists("%s/%s_%s.csv"%(output_dir, cfg_name, dataset)):
             print("Ignoring %s because results already exist" % dataset)
             continue

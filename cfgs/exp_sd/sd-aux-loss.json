@@ -7,6 +7,7 @@
     "es_thres" : 0.00,
     "tau" : 1.5,
     "n_latent_kcs" : 20,
+    "initial_kcs" : 20,
     "n_train_batch_seqs" : 100,
     "n_test_batch_seqs" : 500,
     "hard_train_samples" : false,

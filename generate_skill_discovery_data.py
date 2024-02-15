@@ -98,7 +98,7 @@ def generate_clusters(n_clusters,
                                                centers=n_clusters, 
                                                n_features=n_features, 
                                                cluster_std=cluster_std, 
-                                               center_box=[-1, 1])
+                                               center_box=(-1, 1))
             nbrs = NearestNeighbors(n_neighbors=2, algorithm='ball_tree').fit(X)
             distances, indices = nbrs.kneighbors(X)
             point_label = y[indices[:,0]]
@@ -122,7 +122,7 @@ def generate_clusters(n_clusters,
                                         centers=n_clusters, 
                                         n_features=n_features, 
                                         cluster_std=best_std, 
-                                        center_box=[-1, 1])
+                                        center_box=(-1, 1))
     
     return X, y
 
