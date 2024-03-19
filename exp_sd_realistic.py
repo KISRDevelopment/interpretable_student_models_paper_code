@@ -19,7 +19,7 @@ def main():
     use_embeddings = sys.argv[4] == '1'
 
     #datasets = [dataset_name]
-    datasets = [#'sd-realistic_gervetetal_bridge_algebra06', 
+    datasets = ['sd-realistic_gervetetal_bridge_algebra06', 
                 'sd-realistic_gervetetal_statics', 
                 'sd-realistic_gervetetal_assistments09']
     os.makedirs(output_dir, exist_ok=True)

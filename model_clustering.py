@@ -75,7 +75,7 @@ def run(cfg, df, splits):
         #
         # build problem clustering model based on training problems only
         #
-        train_problems = pd.unique(train_df['problem'])
+        train_problems = sorted(pd.unique(train_df['problem']))
         train_problem_features = problem_feature_mat[train_problems, :]
         kmeans_model = sklearn.cluster.KMeans(n_clusters=cfg['n_clusters'], n_init='auto', random_state=0).fit(train_problem_features)
         problem_labels = kmeans_model.predict(problem_feature_mat) # predict labels for all problems
