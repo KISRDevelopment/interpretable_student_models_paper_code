@@ -58,6 +58,7 @@ def extract_assignments(path, problem_text_to_id, problem_text_to_orig, thres=50
     params_file = path.replace('.csv', '.params.npy.npz')
     d = np.load(params_file)
     Aprior = d['Aprior'] # Splits x Problems x KCs
+    trans_logits = d['alpha'] # Splits x Latent KCs x Target x Source (this was mislabeled as alpha, when it should be t)
     
     id_to_problem_text = { v:k for k,v in problem_text_to_id.items() }
 
@@ -65,6 +66,9 @@ def extract_assignments(path, problem_text_to_id, problem_text_to_orig, thres=50
 
     for i in range(Aprior.shape[0]):
         Q = Aprior[i, :, :]
+        split_trans_logits = trans_logits[i, :, :, :] # Latent KCs x Target x Source
+        logit_pL = split_trans_logits[:, 1, 0]
+        logit_pF = split_trans_logits[:, 0, 1]
 
         # compute frequency of each skill
         problem_assignment = np.argmax(Q, axis=1) # P
@@ -76,9 +80,11 @@ def extract_assignments(path, problem_text_to_id, problem_text_to_orig, thres=50
         split_assignments = np.argsort(-Q, axis=0) # PxK
         split_assignments = split_assignments[:thres, :] # 10xK
         readable_assignments = [ {
-                "top_problems" : [id_to_problem_text[i] for i in split_assignments[:, k]],
-                "freq" : int(skill_freq[k])
-            } for k in sorted_skills ]
+            "top_problems" : [id_to_problem_text[i] for i in split_assignments[:, k]],
+            "freq" : int(skill_freq[k]),
+            "logit_pL" : float(logit_pL[k]),
+            "logit_pF" : float(logit_pF[k])
+        } for k in sorted_skills ]
 
         assignments_by_split.append(readable_assignments)
 
