@@ -4,6 +4,7 @@ import sys
 import sklearn.metrics
 import sklearn.cluster
 import re 
+import cluster_metrics
 def main():
     raw_results_dir = sys.argv[1]
     results_file = sys.argv[2]
@@ -13,6 +14,7 @@ def main():
     datasets = set(all_results_df['dataset'])
     models = set(all_results_df['model'])
     ri_col = np.zeros(all_results_df.shape[0])
+    fi_col = np.zeros_like(ri_col)
     for dataset_name in datasets:
         
         df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
@@ -31,17 +33,20 @@ def main():
                 Aprior = params['Aprior'] # Splits x Problems x KCs
             
                 ri = []
+                fi = []
                 for i in range(Aprior.shape[0]):
                     Q = Aprior[i, :, :] 
                     pred_assignment = np.argmax(Q, axis=1)
                     rand_index = sklearn.metrics.rand_score(ref_assignment, pred_assignment)
+                    fmeasure = cluster_metrics.fmeasure(ref_assignment, pred_assignment)
                     ri.append(rand_index)
-
+                    fi.append(fmeasure)
                 
             elif model.startswith('clustering') and not dataset_name.startswith('sd_1_'):
                 splits = np.load("data/splits/%s.npy" % dataset_name)
                 
                 ri = []
+                fi = []
                 for s in range(splits.shape[0]):
                     split = splits[s, :]
 
@@ -57,14 +62,17 @@ def main():
                     problem_labels = kmeans_model.predict(problem_feature_mat) # predict labels for all problems
                     rand_index = sklearn.metrics.rand_score(ref_assignment, problem_labels)
                     ri.append(rand_index)
+                    fi.append(cluster_metrics.fmeasure(ref_assignment, problem_labels))
             else:
                 continue 
                 
             ix = (all_results_df['model'] == model) & (all_results_df['dataset'] == dataset_name)
             ri_col[ix] = ri
-            
-    all_results_df['raw_rand_index'] = ri_col
+            fi_col[ix] = fi 
 
+    all_results_df['raw_rand_index'] = ri_col
+    all_results_df['fmeasure'] = fi_col
+    
     all_results_df.to_csv(results_file, index=False)
     print(all_results_df)
 
