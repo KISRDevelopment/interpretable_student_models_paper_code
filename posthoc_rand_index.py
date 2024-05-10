@@ -68,7 +68,7 @@ def main():
             for pred_assignment in pred_assignments:
                 ri.append(sklearn.metrics.rand_score(ref_assignment, pred_assignment))
                 #fi.append(cluster_metrics.fmeasure(ref_assignment, pred_assignment))
-                vi.append(cluster_metrics.recovered(ref_assignment, pred_assignment))
+                vi.append(cluster_metrics.recovered(ref_assignment, pred_assignment, recall_thres=0.75, precision_thres=0.75))
             
             ix = (all_results_df['model'] == model) & (all_results_df['dataset'] == dataset_name)
             ri_col[ix] = ri

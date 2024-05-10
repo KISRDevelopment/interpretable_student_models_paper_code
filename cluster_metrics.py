@@ -1,10 +1,7 @@
 import numpy as np 
 import sklearn.metrics
 
-def recovered(ref_clustering, pred_clustering, thres=0.9):
-
-    # ref_M = make_membership_profile(ref_clustering) # C_ref x P
-    # pred_M = make_membership_profile(pred_clustering) # C_pred x P
+def recovered(ref_clustering, pred_clustering, recall_thres, precision_thres):
 
     r_clusters = np.unique(ref_clustering)
     p_clusters = np.unique(pred_clustering)
@@ -18,20 +15,19 @@ def recovered(ref_clustering, pred_clustering, thres=0.9):
         u = ref_clustering == r_clusters[i]
         counts[i] = np.sum(u)
         for j in range(R.shape[1]):
-            dst = fast_bacc(u, pred_clustering == p_clusters[j])
-            R[i, j] = dst 
+            R[i, j] = is_match(u, pred_clustering == p_clusters[j], recall_thres=recall_thres, precision_thres=precision_thres) 
     print("Done ", R.shape)
     
-    R = np.sum(counts * (np.max(R, axis=1) >= thres)) / ref_clustering.shape[0]
+    R = np.sum(counts * (np.sum(R, axis=1) > 0)) / ref_clustering.shape[0]
     
     return R 
 
-def fast_bacc(ytrue, ypred):
-
-    recall00 = np.sum((ytrue == 0) & (ypred == 0)) / np.sum(ytrue == 0)
-    recall11 = np.sum((ytrue == 1) & (ypred == 1)) / np.sum(ytrue == 1)
-
-    return (recall00 + recall11) / 2
+def is_match(ytrue, ypred, recall_thres, precision_thres):
+    count11 = np.sum((ytrue == 1) & (ypred == 1))
+    recall11 =    count11 / np.sum(ytrue == 1)
+    precision11 = count11 / (1e-6+np.sum(ypred == 1))
+    #print("Recall: %0.2f, precision: %0.2f" % (recall11, precision11))
+    return (recall11 >= recall_thres) and (precision11 >= precision_thres)
 
 def make_membership_profile(clustering):
 
@@ -85,23 +81,33 @@ def _fmeasure(C):
     return f
 
 def main():
-    C = make_contingency_table([0, 0, 1, 2, 3, 3], [1, 1, 2, 0, 5, 10])
-    print(C)
-    f = fmeasure([0, 0, 1, 2, 3, 3], [1, 1, 2, 0, 5, 10])
-    print(f)
+    # C = make_contingency_table([0, 0, 1, 2, 3, 3], [1, 1, 2, 0, 5, 10])
+    # print(C)
+    # f = fmeasure([0, 0, 1, 2, 3, 3], [1, 1, 2, 0, 5, 10])
+    # print(f)
     
-    R = recovered(np.array([0, 0, 1, 2, 3, 3]), np.array([1, 1, 2, 0, 5, 10]), thres=0.9)
-    print(R)
+    # R = recovered(np.array([0, 0, 1, 2, 3, 3]), np.array([1, 1, 2, 0, 5, 10]), thres=0.9)
+    # print(R)
 
-    a, b = np.array([0, 0, 1, 1, 0, 0, 0, 0, 1]), np.array([0, 1, 0,  0, 0, 0, 0, 0, 1])
-    x = sklearn.metrics.balanced_accuracy_score(a, b)
-    y = fast_bacc(a, b)
+    # a, b = np.array([0, 0, 1, 1, 0, 0, 0, 0, 1]), np.array([0, 1, 0,  0, 0, 0, 0, 0, 1])
+    # x = sklearn.metrics.balanced_accuracy_score(a, b)
+    # y = fast_bacc(a, b)
 
-    print(x, y)
+    # print(x, y)
 
-    x = sklearn.metrics.balanced_accuracy_score(a, np.zeros_like(a))
-    y = fast_bacc(a, np.zeros_like(a))
+    # x = sklearn.metrics.balanced_accuracy_score(a, np.zeros_like(a))
+    # y = fast_bacc(a, np.zeros_like(a))
 
-    print(x, y)
+    # print(x, y)
+
+    #R = recovered(np.array([0, 0, 1, 2, 3, 3]), np.array([1, 1, 2, 0, 5, 10]))
+    #print(R)
+
+    ytrue = np.zeros(500)
+    ytrue[:10] = 1
+    ypred = np.zeros(500)
+    ypred[:5] = 1
+    print(is_match(ytrue, ypred, recall_thres=0.9, precision_thres=0.9))
+
 if __name__ == "__main__":
     main()
