@@ -15,6 +15,8 @@ def load_results(path):
 
     files = glob.glob(path + "/*.csv")
 
+    counts_cache = {}
+
     dfs = []
     for file in files:
         
@@ -25,7 +27,15 @@ def load_results(path):
         df['model'] = model 
         df['dataset'] = dataset
         try: 
-            df['dataset_kcs'] = int(dataset.split('_')[1])
+            if 'gervetetal' not in dataset:
+                df['dataset_kcs'] = int(dataset.split('_')[1])
+            else:
+                if dataset not in counts_cache:
+                    print("Reading")
+                    refdf = pd.read_csv("data/datasets/%s.csv" % dataset)
+                    counts_cache[dataset] =  len(set(refdf['skill']))
+                df['dataset_kcs'] = counts_cache[dataset]
+            
         except:
             df['dataset_kcs'] = 0
         if model.startswith('sd'):
@@ -56,6 +66,11 @@ def load_results(path):
                 model_name += '-rep'
             df['model'] = model_name 
 
+        if 'clustering' in model:
+            cfg_file = file.replace('.csv', '.json')
+            with open(cfg_file, 'r') as f:
+                cfg = json.load(f)
+            df['model_kcs'] = cfg['n_clusters']
 
         dfs.append(df)
     

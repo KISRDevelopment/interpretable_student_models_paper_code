@@ -38,7 +38,7 @@ def main():
         if os.path.exists("%s/%s_%s.csv"%(output_dir, cfg_name, dataset)):
             print("Ignoring %s because results already exist" % dataset)
             continue
-        
+
         embedding_path = "./data/datasets/%s.embeddings.npy" % dataset
         print(cfg_name, dataset, embedding_path)
         output_path = "%s/%s_%s.csv" % (output_dir, cfg_name, dataset)

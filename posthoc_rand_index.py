@@ -8,6 +8,7 @@ import cluster_metrics
 def main():
     raw_results_dir = sys.argv[1]
     results_file = sys.argv[2]
+    model_kcs = int(sys.argv[3])
 
     all_results_df = pd.read_csv(results_file)
     
@@ -16,11 +17,15 @@ def main():
     ri_col = np.zeros(all_results_df.shape[0])
     fi_col = np.zeros_like(ri_col)
     vi_col = np.zeros_like(fi_col)
+    rul_col = np.zeros_like(ri_col)
     for dataset_name in datasets:
         
         df = pd.read_csv("data/datasets/%s.csv" % dataset_name)
         
         ref_assignment = get_problem_skill_assignment(df)
+        ul = cluster_metrics.recovered_upper_limit(ref_assignment, model_kcs)
+        print(ul)
+        
         problem_feature_mat = np.load("data/datasets/%s.embeddings.npy" % dataset_name.replace('_blocked', '').replace('_interleaved',''))
         
         for model in models:
@@ -32,13 +37,13 @@ def main():
             pred_assignments = []
             if model.startswith('sd'):
                 if 'realistic' in dataset_name:
-
                     params_path = "%s/%s_%s.params.npy.npz" % (raw_results_dir, re.sub(r'^sd', 'sd-50kcs', model), dataset_name)
                 else:
                     params_path = "%s/%s_%s.params.npy.npz" % (raw_results_dir, model, dataset_name)
                 params = np.load(params_path)
                 Aprior = params['Aprior'] # Splits x Problems x KCs
-            
+                
+                
                 for i in range(Aprior.shape[0]):
                     Q = Aprior[i, :, :] 
                     pred_assignment = np.argmax(Q, axis=1)
@@ -58,7 +63,7 @@ def main():
                     #
                     train_problems = sorted(pd.unique(train_df['problem']))
                     train_problem_features = problem_feature_mat[train_problems, :]
-                    kmeans_model = sklearn.cluster.KMeans(n_clusters=20, n_init='auto', random_state=0).fit(train_problem_features)
+                    kmeans_model = sklearn.cluster.KMeans(n_clusters=model_kcs, n_init='auto', random_state=0).fit(train_problem_features)
                     problem_labels = kmeans_model.predict(problem_feature_mat) # predict labels for all problems
                     pred_assignments.append(problem_labels)
                 
@@ -74,10 +79,12 @@ def main():
             ri_col[ix] = ri
             #fi_col[ix] = fi 
             vi_col[ix] = vi 
+            rul_col[ix] = ul 
 
     all_results_df['raw_rand_index'] = ri_col
     #all_results_df['fmeasure'] = fi_col
     all_results_df['recovered'] = vi_col
+    all_results_df['recovered_ul'] = rul_col
 
     all_results_df.to_csv(results_file, index=False)
     print(all_results_df)

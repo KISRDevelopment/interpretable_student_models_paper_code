@@ -1,6 +1,18 @@
 import numpy as np 
 import sklearn.metrics
 
+def recovered_upper_limit(clustering, model_kcs):
+
+    # Size K
+    counts = np.bincount(clustering)
+    ix = np.argsort(-counts)
+    counts = counts[ix]
+    
+    # get top M-1
+    ul = np.sum(counts[:model_kcs-1]) / clustering.shape[0] 
+
+    return ul 
+
 def recovered(ref_clustering, pred_clustering, recall_thres, precision_thres):
 
     r_clusters = np.unique(ref_clustering)
@@ -108,6 +120,10 @@ def main():
     ypred = np.zeros(500)
     ypred[:5] = 1
     print(is_match(ytrue, ypred, recall_thres=0.9, precision_thres=0.9))
+
+    ytrue = np.tile(np.arange(50), 10)
+    print(ytrue)
+    print(recovered_upper_limit(ytrue, 20))
 
 if __name__ == "__main__":
     main()
